@@ -55,7 +55,7 @@ make test_NAME           # 다른 명령 테스트 (예: make test_vmstat)
 ## 4. 브랜치 전략
 
 ```
-upstream/master ──> master ──> dev <── feature/<작업이름>   (PR + 상대방 리뷰 후 merge)
+upstream/master ──> master ──> dev <── feature/<작업이름>   (PR → CI ✅ 확인 후 본인이 merge)
 ```
 
 | 브랜치 | 역할 |
@@ -220,5 +220,5 @@ fdstat 의 `fd_limit()` 이 읽는 RLIMIT_NOFILE 을 설정하는 명령이라 �
 1. 이 문서 7장에서 ⬜ 상태인 작업을 고르고, 연결된 이슈에 자신을 담당자(assignee)로 지정한다. 새 작업이면 이슈부터 만든다.
 2. `dev` 에서 `feature/<작업이름>` 브랜치를 딴다.
 3. 코드 + 도움말 + 테스트를 함께 작성하고 `make test_NAME` 이 통과하는지 확인한다.
-4. `dev` 로 PR 을 올리고 (설명에 `Closes #번호`) 상대방 리뷰를 받는다. merge 후 이 문서의 상태를 ✅ 로 바꾼다.
+4. `dev` 로 PR 을 올리고 (설명에 `Closes #번호`), CI ✅ 를 확인한 뒤 본인이 merge 한다. merge 후 이 문서의 상태를 ✅ 로 바꾼다.
 5. 기여 줄 수 확인: `git log --author=<이름> --numstat dev`
