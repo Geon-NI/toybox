@@ -14,7 +14,7 @@
 ## 1. fdstat 이란
 
 ```
-usage: fdstat [-tL] [-w PERCENT] [-d SECONDS] [-n COUNT] [PID...]
+usage: fdstat [-tlLU] [-u USER] [-c NAME] [-w PERCENT] [-d SECONDS] [-n COUNT] [PID...]
 ```
 
 | 사용 예 | 동작 |
@@ -25,6 +25,9 @@ usage: fdstat [-tL] [-w PERCENT] [-d SECONDS] [-n COUNT] [PID...]
 | `fdstat -n 10` | FD 를 가장 많이 연 프로세스 상위 10개 |
 | `fdstat -w 80` | 한도의 80% 를 넘으면 경고 |
 | `fdstat -d 2 -L 1234` | 2초마다 갱신하며 FD 가 계속 늘어나는(누수 의심) 프로세스 표시 |
+| `fdstat -l 1234` | 프로세스의 FD 를 하나씩 (번호 / 종류 / 대상) 출력 |
+| `fdstat -U` | 사용자별 FD 합계 |
+| `fdstat -n 5 -u www-data` | `www-data` 소유 프로세스 중 상위 5개 (`-c NAME` 은 명령 이름으로 필터) |
 
 데이터 출처: `/proc/sys/fs/file-nr`, `/proc/sys/fs/nr_open`, `/proc/PID/fd`, `/proc/PID/limits`, `/proc/net/*`
 
@@ -80,7 +83,7 @@ upstream/master ──> master ──> dev <── feature/<작업이름>   (PR 
 | 영역 | 담당 | 함수 / 옵션 |
 |---|---|---|
 | A. 시스템 통계·한도·모니터링 | 나주한 | `show_system`, `fd_limit`, `check_warn` (`-w`), `-d` 반복문, `check_leak` (`-L`) |
-| B. 프로세스별 통계 | 김건우 | `count_fds`, `fd_type`, `sock_type` (`-t`), `show_pid`, `show_top` (`-n`), 확장 옵션 |
+| B. 프로세스별 통계 | 김건우 | `count_fds`, `fd_type`, `sock_type` (`-t`), `show_pid`, `show_top` (`-n`), `list_fds` (`-l`), `match_proc` (`-u`/`-c`), `show_users` (`-U`) |
 | 공통 | 김건우 | `fdstat_main` 옵션 검증·모드 분기 |
 
 영역 간 연결점: `fd_limit()`(A) 는 `show_pid`/`show_top`(B) 에서 사용률 계산에 쓰고,
@@ -114,6 +117,7 @@ upstream/master ──> master ──> dev <── feature/<작업이름>   (PR 
 #### B2. fdstat 영역 B 확장 — 코드 80~115 / 테스트 40~60
 | 상태 | 작업 | 내용 |
 |---|---|---|
+| ✅ | 뼈대 | 옵션 문자열·도움말·함수 원형 (`list_fds`, `match_proc`, `show_users`), 옵션 충돌 테스트 5개 |
 | ⬜ | `-l` | FD 번호 / 종류 / 대상을 한 줄씩 상세 출력 |
 | ⬜ | `-u USER`, `-c NAME` | 사용자·명령 이름으로 집계 대상 필터링 |
 | ⬜ | `-U` | 프로세스 대신 사용자(UID)별 합계 |

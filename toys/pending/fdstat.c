@@ -5,13 +5,13 @@
  * No standard. Reads /proc/sys/fs/file-nr, /proc/$PID/fd, /proc/$PID/limits
  * and /proc/net/{tcp,tcp6,udp,udp6,unix,netlink}.
 
-USE_FDSTAT(NEWTOY(fdstat, "Ltw#<1>100d#<1n#<1", TOYFLAG_USR|TOYFLAG_BIN))
+USE_FDSTAT(NEWTOY(fdstat, "LtlUu:c:w#<1>100d#<1n#<1[!nU]", TOYFLAG_USR|TOYFLAG_BIN))
 
 config FDSTAT
   bool "fdstat"
   default n
   help
-    usage: fdstat [-tL] [-w PERCENT] [-d SECONDS] [-n COUNT] [PID...]
+    usage: fdstat [-tlLU] [-u USER] [-c NAME] [-w PERCENT] [-d SECONDS] [-n COUNT] [PID...]
 
     Show file descriptor (FD) usage.
 
@@ -26,15 +26,20 @@ config FDSTAT
     -d	Repeat every SECONDS and show the change since last time
     -L	With -d, flag processes whose FD count keeps growing (likely leak)
     -n	Show the COUNT processes with the most open FDs
+    -U	Show FD totals per user instead of per process
+    -l	List each FD of PID (number, type, target)
+    -u	Only count processes owned by USER (with -n or -U)
+    -c	Only count processes whose command name is NAME (with -n or -U)
 */
 
 #define FOR_fdstat
 #include "toys.h"
 
-// GLOBALS 필드는 옵션 문자열의 인자 옵션(w, d, n) 순서의 "역순"으로 나열한다.
-// 인자 없는 플래그(L, t)는 GLOBALS 에 영향을 주지 않는다.
+// GLOBALS 필드는 옵션 문자열의 인자 옵션(u, c, w, d, n) 순서의 "역순"으로 나열한다.
+// 인자 없는 플래그(L, t, l, U)는 GLOBALS 에 영향을 주지 않는다.
 GLOBALS(
   long n, d, w;
+  char *c, *u;
 )
 
 /* ------------------------------------------------------------------ *
@@ -105,16 +110,37 @@ static long count_fds(char *pid, long *types)
   return -1;
 }
 
+// -l: PID 의 FD 를 하나씩 출력 (번호, fd_type 결과, readlink 대상)
+static void list_fds(char *pid)
+{
+  // TODO(김건우): /proc/PID/fd 순회하며 한 줄씩 출력
+}
+
 // 지정한 PID 하나의 FD 정보를 출력 (개수, 한도 대비 사용률, -t 분류)
 static void show_pid(char *pid)
 {
   // TODO(김건우): count_fds + fd_limit 결과 출력, -w 이면 check_warn
+  if (FLAG(l)) list_fds(pid);
 }
 
-// 전체 프로세스 중 FD 사용량 상위 TT.n 개 출력
+// -u/-c 필터: 집계 대상 프로세스면 1. 필터가 없으면 항상 1.
+static int match_proc(char *pid)
+{
+  // TODO(김건우): -u 는 /proc/PID 소유 uid 와 비교 (USER 이름은 main 에서
+  //               한 번만 uid 로 변환), -c 는 /proc/PID/comm 과 비교
+  return 1;
+}
+
+// 전체 프로세스 중 FD 사용량 상위 TT.n 개 출력 (match_proc 통과한 것만)
 static void show_top(void)
 {
   // TODO(김건우): /proc 순회, 정렬, 출력. 권한 없는 프로세스 수는 따로 표시
+}
+
+// -U: 사용자(uid)별 FD 합계 출력 (match_proc 통과한 것만)
+static void show_users(void)
+{
+  // TODO(김건우): /proc 순회하며 uid 별 누적, 많은 순 정렬, 이름으로 출력
 }
 
 /* ------------------------------------------------------------------ *
@@ -125,12 +151,16 @@ void fdstat_main(void)
 {
   char **arg;
 
-  // 모드 충돌 검사
-  if (FLAG(n) && toys.optc) error_exit("-n takes no PID");
+  // 모드 충돌 검사 (-n 과 -U 동시 사용은 옵션 문자열의 [!nU] 가 막는다)
+  if ((FLAG(n) || FLAG(U)) && toys.optc) error_exit("-n/-U take no PID");
   if (FLAG(L) && !FLAG(d)) error_exit("-L needs -d");
+  if (FLAG(l) && !toys.optc) error_exit("-l needs PID");
+  if ((FLAG(u) || FLAG(c)) && !FLAG(n) && !FLAG(U))
+    error_exit("-u/-c need -n or -U");
 
   // TODO(나주한): -d 이면 아래 분기를 TT.d 초 간격 반복문으로 감싼다
   if (FLAG(n)) show_top();
+  else if (FLAG(U)) show_users();
   else if (toys.optc) for (arg = toys.optargs; *arg; arg++) show_pid(*arg);
   else show_system();
 }
