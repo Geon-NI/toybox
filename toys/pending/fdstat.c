@@ -93,13 +93,13 @@ static void check_leak(long pid, long count)
 enum {
   FD_FILE, FD_PIPE, FD_DEV, FD_TCP, FD_UDP, FD_UNIX, FD_NETLINK, FD_SOCK,
   FD_EVENTFD, FD_EPOLL, FD_INOTIFY, FD_TIMERFD, FD_SIGNALFD, FD_ANON,
-  FD_TYPES
+  FD_UNKNOWN, FD_TYPES
 };
 
 // -t 출력 이름. 위 enum 순서와 같아야 한다.
 static char *type_names[] = {"file", "pipe", "dev", "tcp", "udp", "unix",
   "netlink", "socket", "eventfd", "epoll", "inotify", "timerfd", "signalfd",
-  "anon"};
+  "anon", "unknown"};
 
 static int cmp_ll(const void *a, const void *b)
 {
@@ -197,8 +197,9 @@ static long count_fds(char *pid, long *types)
     if (*de->d_name == '.') continue;
     count++;
     if (types) {
-      readlinkat0(dirfd(dir), de->d_name, toybuf, sizeof(toybuf));
-      types[fd_type(toybuf)]++;
+      // 목록은 보여도 링크는 못 읽게 막힌 프로세스가 있다 (예: systemd --user)
+      types[readlinkat0(dirfd(dir), de->d_name, toybuf, sizeof(toybuf))
+        ? fd_type(toybuf) : FD_UNKNOWN]++;
     }
   }
   closedir(dir);
