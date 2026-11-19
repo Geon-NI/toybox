@@ -43,6 +43,11 @@ GLOBALS(
 
   // 여기부터는 옵션과 무관한 내부 상태
   int hdr;        // 프로세스 표 머리글을 이미 출력했으면 1
+
+  // 소켓 inode 캐시 (sock_type): 원소 = (inode << 4) | 종류, inode 순 정렬
+  // -d 반복에서는 매 회차 sockread = 0 으로 되돌려 다시 읽게 해야 한다.
+  long long *socks;
+  int nsock, sockread;
 )
 
 /* ------------------------------------------------------------------ *
@@ -91,19 +96,89 @@ enum {
   FD_TYPES
 };
 
-// readlink(/proc/PID/fd/N) 결과로 FD 종류를 판정
-// "socket:[inode]" 는 sock_type() 으로, "anon_inode:[name]" 은 이름으로 세분화
-static int fd_type(char *link)
+// -t 출력 이름. 위 enum 순서와 같아야 한다.
+static char *type_names[] = {"file", "pipe", "dev", "tcp", "udp", "unix",
+  "netlink", "socket", "eventfd", "epoll", "inotify", "timerfd", "signalfd",
+  "anon"};
+
+static int cmp_ll(const void *a, const void *b)
 {
-  // TODO(김건우): 접두사 비교 (socket:, pipe:, anon_inode:, /dev/)
-  return FD_FILE;
+  long long x = *(long long *)a, y = *(long long *)b;
+
+  return (x > y) - (x < y);
+}
+
+// /proc/net 의 소켓 테이블을 읽어 TT.socks 에 (inode << 4) | 종류 로 모은다.
+// inode 위치: unix 는 7번째 칸, tcp/udp/netlink 는 10번째 칸. 첫 줄은 머리글.
+// bind 하지 않은 netlink 소켓은 커널이 목록에 넣지 않아 "socket" 으로 분류된다.
+static void load_socks(void)
+{
+  struct { char *name; int type; } tab[] = {{"tcp", FD_TCP}, {"tcp6", FD_TCP},
+    {"udp", FD_UDP}, {"udp6", FD_UDP}, {"unix", FD_UNIX},
+    {"netlink", FD_NETLINK}};
+  char buf[32], *line, *s;
+  long long ino;
+  FILE *fp;
+  int i, col;
+
+  TT.nsock = 0;
+  for (i = 0; i < ARRAY_LEN(tab); i++) {
+    sprintf(buf, "/proc/net/%s", tab[i].name);
+    if (!(fp = fopen(buf, "r"))) continue;   // IPv6 꺼진 시스템 등은 건너뜀
+    free(xgetline(fp));
+    while ((line = xgetline(fp))) {
+      for (s = line, col = 1; col < (tab[i].type == FD_UNIX ? 7 : 10); col++) {
+        s += strspn(s, " ");    // 칸 앞 공백 건너뛰기
+        s += strcspn(s, " ");   // 칸 내용 건너뛰기
+      }
+      if ((ino = atoll(s)) > 0) {
+        if (!(TT.nsock & 255))
+          TT.socks = xrealloc(TT.socks, (TT.nsock+256)*sizeof(long long));
+        TT.socks[TT.nsock++] = (ino << 4) | tab[i].type;
+      }
+      free(line);
+    }
+    fclose(fp);
+  }
+  qsort(TT.socks, TT.nsock, sizeof(long long), cmp_ll);
+  TT.sockread = 1;
 }
 
 // 소켓 inode 가 /proc/net/{tcp,tcp6,udp,udp6,unix,netlink} 중 어디 있는지 확인
-static int sock_type(long inode)
+// 테이블은 처음 한 번만 읽고 (load_socks) 이후엔 이진 탐색.
+static int sock_type(long long inode)
 {
-  // TODO(김건우): /proc/net 테이블을 한 번 읽어 캐시해 두고 조회
-  return FD_SOCK;
+  int lo = 0, hi, mid;
+
+  if (!TT.sockread) load_socks();
+  for (hi = TT.nsock; lo < hi;)
+    if ((TT.socks[mid = (lo+hi)/2] >> 4) < inode) lo = mid+1;
+    else hi = mid;
+
+  return (lo < TT.nsock && (TT.socks[lo] >> 4) == inode)
+    ? TT.socks[lo] & 15 : FD_SOCK;
+}
+
+// readlink(/proc/PID/fd/N) 결과로 FD 종류를 판정
+// "socket:[inode]" 는 sock_type() 으로, "anon_inode:[name]" 은 이름으로 세분화
+// 주의: inotify 만 대괄호 없이 "anon_inode:inotify" 로 나온다.
+static int fd_type(char *link)
+{
+  char *anon[] = {"eventfd", "eventpoll", "inotify", "timerfd", "signalfd"};
+  int i;
+
+  if (strstart(&link, "socket:[")) return sock_type(atoll(link));
+  if (strstart(&link, "pipe:")) return FD_PIPE;
+  if (strstart(&link, "anon_inode:")) {
+    if (*link == '[') link++;
+    for (i = 0; i < ARRAY_LEN(anon); i++)
+      if (strstart(&link, anon[i]) && (!*link || *link == ']'))
+        return FD_EVENTFD+i;
+    return FD_ANON;
+  }
+  if (strstart(&link, "/dev/")) return FD_DEV;
+
+  return FD_FILE;
 }
 
 // /proc/PID/fd 를 순회해 FD 개수를 세고, types 가 있으면 종류별로 누적.
@@ -143,11 +218,12 @@ static void list_fds(char *pid)
 static void show_pid(char *pid)
 {
   char buf[64], *s;
-  long count, limit;
+  long count, limit, types[FD_TYPES] = {0};
+  int i;
 
   for (s = pid; isdigit(*s); s++);
   if (*s || s == pid) return error_msg("bad PID '%s'", pid);
-  if ((count = count_fds(pid, 0)) < 0) {
+  if ((count = count_fds(pid, FLAG(t) ? types : 0)) < 0) {
     if (errno == ENOENT) return error_msg("%s: no such process", pid);
     return perror_msg("%s", pid);
   }
@@ -165,7 +241,14 @@ static void show_pid(char *pid)
     if (FLAG(w)) check_warn(pid, count, limit);
   } else printf("%8s %5s\n", limit ? "?" : "-", limit ? "?" : "-");
 
-  // TODO(김건우): -t 이면 count_fds(pid, types) 로 종류별 개수 출력 (PR ②)
+  // -t: 0 이 아닌 종류만 "이름 개수" 로 한 줄에
+  //         file 5  pipe 2  tcp 30
+  if (FLAG(t)) {
+    printf("%8s", "");
+    for (i = 0; i < FD_TYPES; i++)
+      if (types[i]) printf(" %s %ld ", type_names[i], types[i]);
+    xputc('\n');
+  }
   if (FLAG(l)) list_fds(pid);
 }
 
