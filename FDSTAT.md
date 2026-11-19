@@ -65,6 +65,8 @@ upstream/master ──> master ──> dev <── feature/<작업이름>   (PR 
 | `feature/*` | 작업 단위 브랜치. `dev` 에서 따서 작업 (예: `feature/fdstat-pid`, `feature/column`) |
 
 작업 하나 = 이슈 하나 = 브랜치 하나 = PR 하나를 원칙으로 합니다.
+PR 설명에 `Closes #이슈번호` 를 적으면 merge 될 때 이슈가 자동으로 닫힙니다.
+이슈 목록: https://github.com/Geon-NI/toybox/issues (라벨 `area-A` = 나주한, `area-B` = 김건우)
 
 ## 5. toybox 코딩 규칙 요약
 
@@ -104,7 +106,7 @@ upstream/master ──> master ──> dev <── feature/<작업이름>   (PR 
 
 ### 7.1 김건우
 
-#### B1. fdstat 영역 B 기본 구현 — 코드 170~230 / 테스트 60~90
+#### B1. fdstat 영역 B 기본 구현 — 코드 170~230 / 테스트 60~90 · 이슈 [#9](https://github.com/Geon-NI/toybox/issues/9)
 | 상태 | 작업 | 내용 |
 |---|---|---|
 | ✅ | 뼈대 | 옵션 문자열, 도움말, 함수 원형, 옵션 검증 테스트 4개 |
@@ -114,7 +116,7 @@ upstream/master ──> master ──> dev <── feature/<작업이름>   (PR 
 | ⬜ | `show_top` (`-n`) | `/proc` 전체 순회, FD 수 기준 정렬, 상위 N개 출력, 권한 없어 건너뛴 프로세스 수 표시 |
 | ⬜ | 테스트 | `sh -c 'exec 3</dev/null 4</dev/null; ...'` 로 FD 수를 고정해 비교, `-t`·`-n` 출력 확인 |
 
-#### B2. fdstat 영역 B 확장 — 코드 80~115 / 테스트 40~60
+#### B2. fdstat 영역 B 확장 — 코드 80~115 / 테스트 40~60 · 이슈 [#10](https://github.com/Geon-NI/toybox/issues/10)
 | 상태 | 작업 | 내용 |
 |---|---|---|
 | ✅ | 뼈대 | 옵션 문자열·도움말·함수 원형 (`list_fds`, `match_proc`, `show_users`), 옵션 충돌 테스트 5개 |
@@ -122,32 +124,32 @@ upstream/master ──> master ──> dev <── feature/<작업이름>   (PR 
 | ⬜ | `-u USER`, `-c NAME` | 사용자·명령 이름으로 집계 대상 필터링 |
 | ⬜ | `-U` | 프로세스 대신 사용자(UID)별 합계 |
 
-#### B3. `/proc` 공용 라이브러리 — 코드 180~270
+#### B3. `/proc` 공용 라이브러리 — 코드 180~270 · 이슈 [#11](https://github.com/Geon-NI/toybox/issues/11)
 `lsof.c` 와 `netstat.c` 가 `/proc/net/*` 파싱을 각자 중복 구현하고 있고, fdstat 도 같은 기능이 필요하다.
 | 상태 | 작업 | 내용 |
 |---|---|---|
 | ⬜ | `lib/` 함수 추가 | PID 별 FD 순회, 소켓 inode → 종류/주소 조회 |
 | ⬜ | 적용 | fdstat · lsof · netstat 이 공용 함수를 쓰도록 수정 (동작 변화 없음을 테스트로 확인) |
 
-#### B4. `lsof` 정리 (`toys/pending/lsof.c`) — 코드 150~250 / 테스트 80~120
+#### B4. `lsof` 정리 (`toys/pending/lsof.c`) — 코드 150~250 / 테스트 80~120 · 이슈 [#12](https://github.com/Geon-NI/toybox/issues/12)
 | 상태 | 작업 | 내용 |
 |---|---|---|
 | ⬜ | 정리 | `www/cleanup.html` 기준 정리, B3 공용 함수 적용, 옵션·출력 버그 수정 |
 | ⬜ | 테스트 신규 | 현재 `tests/lsof.test` 없음. `-p`, `-t` 등 FD 를 고정한 셸로 확인 |
 
-#### B5. `column` 신규 명령 ([#591](https://github.com/landley/toybox/issues/591)) — 코드 200~300 / 테스트 60~100
+#### B5. `column` 신규 명령 ([#591](https://github.com/landley/toybox/issues/591)) — 코드 200~300 / 테스트 60~100 · 이슈 [#13](https://github.com/Geon-NI/toybox/issues/13)
 | 상태 | 작업 | 내용 |
 |---|---|---|
 | ⬜ | 구현 | `toys/pending/column.c`. `-t`, `-s`, `-o`, `-c`, `-x`, `-N`, `-R` |
 | ⬜ | 테스트 | util-linux `column` 출력과 비교 |
 
-#### B6. `/proc` 명령 버그 수정·테스트 — 코드 5~15 / 테스트 120~190
+#### B6. `/proc` 명령 버그 수정·테스트 — 코드 5~15 / 테스트 120~190 · 이슈 [#14](https://github.com/Geon-NI/toybox/issues/14)
 | 상태 | 작업 | 내용 |
 |---|---|---|
 | ⬜ | `vmstat` bi/bo ([#525](https://github.com/landley/toybox/issues/525)) | `pgpgin`/`pgpgout` 은 KB 단위인데 페이지 크기를 곱하는 버그 수정 + 테스트 신규 |
 | ⬜ | 테스트 신규 | `netstat`, `pwdx`, `free`, `pmap` (현재 모두 테스트 없음) |
 
-#### B7. `swapon -a` / `swapoff -a` ([#594](https://github.com/landley/toybox/issues/594)) — 코드 60~100 / 테스트 20~40
+#### B7. `swapon -a` / `swapoff -a` ([#594](https://github.com/landley/toybox/issues/594)) — 코드 60~100 / 테스트 20~40 · 이슈 [#15](https://github.com/Geon-NI/toybox/issues/15)
 | 상태 | 작업 | 내용 |
 |---|---|---|
 | ⬜ | 구현 | `/etc/fstab` 의 swap 항목 처리, `noauto`·이미 활성(`/proc/swaps`) 건너뛰기, `pri=` 지원 |
@@ -155,7 +157,7 @@ upstream/master ──> master ──> dev <── feature/<작업이름>   (PR 
 
 ### 7.2 나주한 (제안, 협의 필요)
 
-#### A1. fdstat 영역 A — 코드 100~150 / 테스트 40~70
+#### A1. fdstat 영역 A — 코드 100~150 / 테스트 40~70 · 이슈 [#2](https://github.com/Geon-NI/toybox/issues/2)
 | 상태 | 작업 | 내용 |
 |---|---|---|
 | ⬜ | `show_system` | `file-nr`, `file-max`, `nr_open` 파싱·출력 |
@@ -163,18 +165,18 @@ upstream/master ──> master ──> dev <── feature/<작업이름>   (PR 
 | ⬜ | `-d` | `fdstat_main` 분기를 반복문으로 감싸고 직전 값 대비 변화량 출력 |
 | ⬜ | `check_leak` (`-L`) | PID 별 이력 저장(사라진 PID 정리), 연속 증가 판정 |
 
-#### A2. `sysctl --system` ([#575](https://github.com/landley/toybox/issues/575)) — 코드 40~80 / 테스트 30~50
+#### A2. `sysctl --system` ([#575](https://github.com/landley/toybox/issues/575)) — 코드 40~80 / 테스트 30~50 · 이슈 [#3](https://github.com/Geon-NI/toybox/issues/3)
 | 상태 | 작업 | 내용 |
 |---|---|---|
 | ⬜ | 구현 | `/etc/sysctl.d`, `/run/sysctl.d`, `/usr/lib/sysctl.d`, `/etc/sysctl.conf` 순서 처리, 같은 파일 이름은 우선순위 높은 쪽만. 기존 `-p` 코드 재사용 |
 | ⬜ | 테스트 신규 | 현재 `tests/sysctl.test` 없음 |
 
-#### A3. `envsubst` 신규 명령 ([#507](https://github.com/landley/toybox/issues/507)) — 120~200
+#### A3. `envsubst` 신규 명령 ([#507](https://github.com/landley/toybox/issues/507)) — 120~200 · 이슈 [#4](https://github.com/Geon-NI/toybox/issues/4)
 | 상태 | 작업 | 내용 |
 |---|---|---|
 | ⬜ | 구현 + 테스트 | `$VAR`, `${VAR}` 치환, SHELL-FORMAT 인자로 대상 변수 제한, `-v`. 명령 치환 `$(...)` 은 실행하지 않음 |
 
-#### A4. fuzzing 으로 발견된 메모리 오류 수정 — 건당 10~30
+#### A4. fuzzing 으로 발견된 메모리 오류 수정 — 건당 10~30 · 이슈 [#5](https://github.com/Geon-NI/toybox/issues/5)
 | 상태 | 이슈 | 대상 |
 |---|---|---|
 | ⬜ | [#571](https://github.com/landley/toybox/issues/571) | getopt heap-buffer-overflow |
@@ -186,16 +188,16 @@ upstream/master ──> master ──> dev <── feature/<작업이름>   (PR 
 
 ASAN 으로 재현 → 수정 → 같은 입력으로 회귀 테스트 추가.
 
-#### A5. `w` 테스트 신규 — 테스트 20~40
+#### A5. `w` 테스트 신규 — 테스트 20~40 · 이슈 [#6](https://github.com/Geon-NI/toybox/issues/6)
 
-#### A6. `ipcs` / `ipcrm` 정리 (`toys/pending/`) — 코드 120~200 / 테스트 50~80
+#### A6. `ipcs` / `ipcrm` 정리 (`toys/pending/`) — 코드 120~200 / 테스트 50~80 · 이슈 [#7](https://github.com/Geon-NI/toybox/issues/7)
 `/proc/sysvipc/{shm,sem,msg}` 를 읽어 시스템 자원 사용량을 보여주는 명령으로, 영역 A 의 `show_system` 과 구조가 비슷하다.
 | 상태 | 작업 | 내용 |
 |---|---|---|
 | ⬜ | 정리 | `www/cleanup.html` 기준 정리 (`ipcs.c` 447줄, `ipcrm.c` 88줄), 중복 출력 코드 통합, 옵션·에러 처리 수정 |
 | ⬜ | 테스트 신규 | 현재 `tests/ipcs.test` 없음. `ipcs -l` 한도 출력, `ipcrm` 잘못된 ID 에러 등 |
 
-#### A7. `ulimit` / `prlimit` 테스트 신규 (`toys/posix/ulimit.c`) — 테스트 40~70
+#### A7. `ulimit` / `prlimit` 테스트 신규 (`toys/posix/ulimit.c`) — 테스트 40~70 · 이슈 [#8](https://github.com/Geon-NI/toybox/issues/8)
 fdstat 의 `fd_limit()` 이 읽는 RLIMIT_NOFILE 을 설정하는 명령이라 영역 A 와 직접 연결된다.
 | 상태 | 작업 | 내용 |
 |---|---|---|
@@ -215,8 +217,8 @@ fdstat 의 `fd_limit()` 이 읽는 RLIMIT_NOFILE 을 설정하는 명령이라 �
 
 ## 9. 처음 기여하는 방법
 
-1. 이 문서 7장에서 ⬜ 상태인 작업을 고르고, 포크에 이슈를 만든다 (원본 이슈 번호가 있으면 링크).
+1. 이 문서 7장에서 ⬜ 상태인 작업을 고르고, 연결된 이슈에 자신을 담당자(assignee)로 지정한다. 새 작업이면 이슈부터 만든다.
 2. `dev` 에서 `feature/<작업이름>` 브랜치를 딴다.
 3. 코드 + 도움말 + 테스트를 함께 작성하고 `make test_NAME` 이 통과하는지 확인한다.
-4. `dev` 로 PR 을 올리고 상대방 리뷰를 받는다. merge 후 이 문서의 상태를 ✅ 로 바꾼다.
+4. `dev` 로 PR 을 올리고 (설명에 `Closes #번호`) 상대방 리뷰를 받는다. merge 후 이 문서의 상태를 ✅ 로 바꾼다.
 5. 기여 줄 수 확인: `git log --author=<이름> --numstat dev`
