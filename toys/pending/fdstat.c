@@ -40,6 +40,9 @@ config FDSTAT
 GLOBALS(
   long n, d, w;
   char *c, *u;
+
+  // 여기부터는 옵션과 무관한 내부 상태
+  int hdr;        // 프로세스 표 머리글을 이미 출력했으면 1
 )
 
 /* ------------------------------------------------------------------ *
@@ -54,7 +57,8 @@ static void show_system(void)
   // TODO(나주한): 파싱 및 출력, -w 이면 file-max 대비 사용률 경고
 }
 
-// /proc/PID/limits 의 "Max open files" soft 한도를 반환 (실패 시 -1)
+// /proc/PID/limits 의 "Max open files" soft 한도를 반환.
+// 실패 시 -1, "unlimited" 면 0. (show_pid 는 -1 → "?", 0 → "-" 로 출력)
 // 영역 B 의 show_pid/show_top 에서도 사용률 계산에 쓴다.
 static long fd_limit(char *pid)
 {
@@ -103,11 +107,28 @@ static int sock_type(long inode)
 }
 
 // /proc/PID/fd 를 순회해 FD 개수를 세고, types 가 있으면 종류별로 누적.
-// 권한이 없으면 -1 을 반환한다. show_pid 와 show_top 이 함께 쓴다.
+// 열 수 없으면 (없는 PID, 권한 없음) errno 를 남기고 -1 을 반환한다.
+// show_pid 와 show_top 이 함께 쓴다.
 static long count_fds(char *pid, long *types)
 {
-  // TODO(김건우): dirtree_read() 또는 opendir 로 순회
-  return -1;
+  char buf[64];
+  struct dirent *de;
+  DIR *dir;
+  long count = 0;
+
+  sprintf(buf, "/proc/%s/fd", pid);
+  if (!(dir = opendir(buf))) return -1;
+  while ((de = readdir(dir))) {
+    if (*de->d_name == '.') continue;
+    count++;
+    if (types) {
+      readlinkat0(dirfd(dir), de->d_name, toybuf, sizeof(toybuf));
+      types[fd_type(toybuf)]++;
+    }
+  }
+  closedir(dir);
+
+  return count;
 }
 
 // -l: PID 의 FD 를 하나씩 출력 (번호, fd_type 결과, readlink 대상)
@@ -117,9 +138,34 @@ static void list_fds(char *pid)
 }
 
 // 지정한 PID 하나의 FD 정보를 출력 (개수, 한도 대비 사용률, -t 분류)
+//   PID     COMMAND            FDS    LIMIT  USE%
+//   1234    nginx               42     1024    4%
 static void show_pid(char *pid)
 {
-  // TODO(김건우): count_fds + fd_limit 결과 출력, -w 이면 check_warn
+  char buf[64], *s;
+  long count, limit;
+
+  for (s = pid; isdigit(*s); s++);
+  if (*s || s == pid) return error_msg("bad PID '%s'", pid);
+  if ((count = count_fds(pid, 0)) < 0) {
+    if (errno == ENOENT) return error_msg("%s: no such process", pid);
+    return perror_msg("%s", pid);
+  }
+
+  // 프로세스 이름. 읽는 사이 프로세스가 끝났으면 "?"
+  sprintf(buf, "/proc/%s/comm", pid);
+  if (!readfile(buf, s = libbuf, sizeof(libbuf))) s = "?";
+  chomp(s);
+
+  if (!TT.hdr++)
+    printf("%-7s %-15s %6s %8s %5s\n", "PID", "COMMAND", "FDS", "LIMIT", "USE%");
+  printf("%-7s %-15s %6ld ", pid, s, count);
+  if ((limit = fd_limit(pid)) > 0) {
+    printf("%8ld %4ld%%\n", limit, count*100/limit);
+    if (FLAG(w)) check_warn(pid, count, limit);
+  } else printf("%8s %5s\n", limit ? "?" : "-", limit ? "?" : "-");
+
+  // TODO(김건우): -t 이면 count_fds(pid, types) 로 종류별 개수 출력 (PR ②)
   if (FLAG(l)) list_fds(pid);
 }
 

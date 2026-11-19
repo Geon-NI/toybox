@@ -18,6 +18,24 @@ testcmd "-c without -n/-U" "-c sh 1 2>/dev/null || echo err" "err\n" "" ""
 # TODO(나주한): 시스템 모드 출력, -w 경고, -d 반복, -L 누수 감지
 #   예: 셸에서 FD 를 하나씩 더 열면서 -d 1 -L 로 감지되는지 확인
 
-# TODO(김건우): PID 모드 개수, -t 분류, -n 정렬, 없는 PID
-#   예: sh -c 'exec 3</dev/null 4</dev/null; ...' 로 FD 수를 고정해 비교
-#   -l 출력 형식, -u/-c 필터, -U 사용자별 합계
+# PID 모드 (B1)
+# 테스트 명령은 서브셸에서 돌기 때문에 $$ 대신 $BASHPID 로 "지금 이 셸" 을 가리킨다.
+# $(...) 안에서는 $BASHPID 가 또 다른 서브셸이 되므로 P 에 먼저 저장해 둔다.
+# 상속받은 FD 수는 환경마다 다르므로 절대값 대신 FD 를 더 연 뒤의 "차이" 를 본다.
+fdcol() { "$C" "$1" | awk -v c=$2 'NR==2{print $c}'; }
+
+testing "header" "\"\$C\" \$BASHPID | head -n1" \
+  "PID     COMMAND            FDS    LIMIT  USE%\n" "" ""
+testing "PID column" "P=\$BASHPID; [ \$(fdcol \$P 1) = \$P ] && echo yes" \
+  "yes\n" "" ""
+testing "counts opened FDs" \
+  "P=\$BASHPID; A=\$(fdcol \$P 3); exec 7</dev/null 8</dev/null 9</dev/null;
+   B=\$(fdcol \$P 3); exec 7<&- 8<&- 9<&-; echo \$((B-A))" "3\n" "" ""
+testing "header once for many PIDs" "\"\$C\" \$BASHPID \$BASHPID | wc -l" \
+  "3\n" "" ""
+testcmd "no such process" "999999999 2>/dev/null || echo err" "err\n" "" ""
+testcmd "bad PID" "12ab 2>/dev/null || echo err" "err\n" "" ""
+testcmd "bad PID still shows others" "abc \$BASHPID 2>/dev/null | wc -l" \
+  "2\n" "" ""
+
+# TODO(김건우): -t 분류, -n 정렬, -l 출력 형식, -u/-c 필터, -U 사용자별 합계
