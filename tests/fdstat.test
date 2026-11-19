@@ -69,4 +69,17 @@ print(" ".join(w for w in want if w in out))'
 testing "-t sockets and anon_inodes" "python3 -c \"\$PYFD\" \"\$C\"" \
   "tcp udp unix netlink eventfd epoll inotify timerfd signalfd\n" "" ""
 
-# TODO(김건우): -n 정렬, -l 출력 형식, -u/-c 필터, -U 사용자별 합계
+# -n 상위 N개 (B1). 읽을 수 없는 프로세스 안내는 stderr 라 2>/dev/null 로 버린다.
+testing "-n 1 one row" "\"\$C\" -n 1 2>/dev/null | wc -l" "2\n" "" ""
+testing "-n sorted" "\"\$C\" -n 50 2>/dev/null |
+  awk 'NR>1{if(p!=\"\" && \$3>p) b=1; p=\$3} END{print b ? \"no\" : \"yes\"}'" \
+  "yes\n" "" ""
+# FD 600개를 연 프로세스를 띄워 Top 5 안에 들어오는지 (마지막 FD 가 생길 때까지 대기)
+testing "-n finds busy process" \
+  "(for i in \$(seq 10 609); do eval \"exec \$i</dev/null\"; done; exec sleep 30) &
+   P=\$!; until [ -e /proc/\$P/fd/609 ]; do :; done
+   \"\$C\" -n 5 2>/dev/null | awk -v p=\$P '\$1==p && \$3>=600{print \"found\"}'
+   kill \$P" "found\n" "" ""
+testing "-n with -t" "\"\$C\" -n 1 -t 2>/dev/null | wc -l" "3\n" "" ""
+
+# TODO(김건우): -l 출력 형식, -u/-c 필터, -U 사용자별 합계

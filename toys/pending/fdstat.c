@@ -213,21 +213,15 @@ static void list_fds(char *pid)
   // TODO(김건우): /proc/PID/fd 순회하며 한 줄씩 출력
 }
 
-// 지정한 PID 하나의 FD 정보를 출력 (개수, 한도 대비 사용률, -t 분류)
+// 프로세스 한 줄 출력 (show_pid, show_top 공용). -t 면 types 로 분류 줄 추가.
 //   PID     COMMAND            FDS    LIMIT  USE%
 //   1234    nginx               42     1024    4%
-static void show_pid(char *pid)
+//            file 5  pipe 2  tcp 30
+static void print_row(char *pid, long count, long *types)
 {
   char buf[64], *s;
-  long count, limit, types[FD_TYPES] = {0};
+  long limit;
   int i;
-
-  for (s = pid; isdigit(*s); s++);
-  if (*s || s == pid) return error_msg("bad PID '%s'", pid);
-  if ((count = count_fds(pid, FLAG(t) ? types : 0)) < 0) {
-    if (errno == ENOENT) return error_msg("%s: no such process", pid);
-    return perror_msg("%s", pid);
-  }
 
   // 프로세스 이름. 읽는 사이 프로세스가 끝났으면 "?"
   sprintf(buf, "/proc/%s/comm", pid);
@@ -250,6 +244,21 @@ static void show_pid(char *pid)
       if (types[i]) printf(" %s %ld ", type_names[i], types[i]);
     xputc('\n');
   }
+}
+
+// 지정한 PID 하나의 FD 정보를 출력 (개수, 한도 대비 사용률, -t 분류, -l 목록)
+static void show_pid(char *pid)
+{
+  long count, types[FD_TYPES] = {0};
+  char *s;
+
+  for (s = pid; isdigit(*s); s++);
+  if (*s || s == pid) return error_msg("bad PID '%s'", pid);
+  if ((count = count_fds(pid, FLAG(t) ? types : 0)) < 0) {
+    if (errno == ENOENT) return error_msg("%s: no such process", pid);
+    return perror_msg("%s", pid);
+  }
+  print_row(pid, count, types);
   if (FLAG(l)) list_fds(pid);
 }
 
@@ -262,9 +271,38 @@ static int match_proc(char *pid)
 }
 
 // 전체 프로세스 중 FD 사용량 상위 TT.n 개 출력 (match_proc 통과한 것만)
+// 원소 = (FD 수 << 32) | PID 로 모아 내림차순 정렬. PID 는 최대 2^22 라 32비트면 충분.
+// 권한이 없어 못 읽은 프로세스는 개수만 세서 stderr 로 알린다 (종료 코드는 0).
 static void show_top(void)
 {
-  // TODO(김건우): /proc 순회, 정렬, 출력. 권한 없는 프로세스 수는 따로 표시
+  long long *top = 0, c;
+  long types[FD_TYPES];
+  int n = 0, i, skip = 0;
+  struct dirent *de;
+  char pid[16];
+  DIR *dir;
+
+  if (!(dir = opendir("/proc"))) perror_exit("/proc");
+  while ((de = readdir(dir))) {
+    if (!isdigit(*de->d_name) || !match_proc(de->d_name)) continue;
+    if ((c = count_fds(de->d_name, 0)) < 0) {
+      if (errno != ENOENT) skip++;      // ENOENT: 그 사이 종료됨 → 조용히 무시
+      continue;
+    }
+    if (!(n & 255)) top = xrealloc(top, (n+256)*sizeof(long long));
+    top[n++] = (c << 32) | atol(de->d_name);
+  }
+  closedir(dir);
+
+  qsort(top, n, sizeof(long long), cmp_ll);
+  for (i = n-1; i >= 0 && i >= n-TT.n; i--) {
+    sprintf(pid, "%lld", top[i] & 0xffffffff);
+    memset(types, 0, sizeof(types));
+    if (FLAG(t)) count_fds(pid, types);
+    print_row(pid, top[i] >> 32, types);
+  }
+  if (skip) fprintf(stderr, "(%d processes not readable)\n", skip);
+  free(top);
 }
 
 // -U: 사용자(uid)별 FD 합계 출력 (match_proc 통과한 것만)
