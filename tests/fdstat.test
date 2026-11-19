@@ -1,0 +1,23 @@
+#!/bin/bash
+
+[ -f testing.sh ] && . testing.sh
+
+#testing "name" "command" "result" "infile" "stdin"
+
+# 옵션 검증 (지금도 통과해야 함)
+testcmd "-n with PID" "-n 3 1 2>/dev/null || echo err" "err\n" "" ""
+testcmd "-L without -d" "-L 2>/dev/null || echo err" "err\n" "" ""
+testcmd "-w out of range" "-w 101 2>/dev/null || echo err" "err\n" "" ""
+testcmd "-n zero" "-n 0 2>/dev/null || echo err" "err\n" "" ""
+testcmd "-n with -U" "-n 3 -U 2>/dev/null || echo err" "err\n" "" ""
+testcmd "-U with PID" "-U 1 2>/dev/null || echo err" "err\n" "" ""
+testcmd "-l without PID" "-l 2>/dev/null || echo err" "err\n" "" ""
+testcmd "-u without -n/-U" "-u root 2>/dev/null || echo err" "err\n" "" ""
+testcmd "-c without -n/-U" "-c sh 1 2>/dev/null || echo err" "err\n" "" ""
+
+# TODO(나주한): 시스템 모드 출력, -w 경고, -d 반복, -L 누수 감지
+#   예: 셸에서 FD 를 하나씩 더 열면서 -d 1 -L 로 감지되는지 확인
+
+# TODO(김건우): PID 모드 개수, -t 분류, -n 정렬, 없는 PID
+#   예: sh -c 'exec 3</dev/null 4</dev/null; ...' 로 FD 수를 고정해 비교
+#   -l 출력 형식, -u/-c 필터, -U 사용자별 합계
