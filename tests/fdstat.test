@@ -83,3 +83,47 @@ testing "-n finds busy process" \
 testing "-n with -t" "\"\$C\" -n 1 -t 2>/dev/null | wc -l" "3\n" "" ""
 
 # TODO(김건우): -l 출력 형식, -u/-c 필터, -U 사용자별 합계
+
+# A1: 시스템 통계 출력 확인
+testing "A1 system fields" \
+  '"$C" | grep -Ec "^(Allocated|Unused|In use|Max|file-max|nr_open):"' \
+  "6\n" "" ""
+
+# A1: FD 한도 초과 경고 확인
+testing "A1 warning" \
+  '(ulimit -n 32; P=$BASHPID; "$C" -w 1 "$P" 2>&1 | grep -q "WARNING:" && echo yes)' \
+  "yes\n" "" ""
+
+# A1: 반복 모니터링 변화량 출력 확인
+testing "A1 monitoring" \
+  'timeout 4s "$C" -d 1 | grep -c "^Change:" | awk '\''$1 >= 2 {print "yes"}'\''' \
+  "yes\n" "" ""
+
+# A1: FD 누수 의심 감지 자동화 테스트
+fdstat_leak_test()
+{
+  local pid result
+
+  # FD를 조금씩 늘리는 테스트 프로세스 생성
+  bash -c 'sleep 0.5; for fd in {3..24}; do
+    eval "exec $fd</dev/null"
+    sleep 0.2
+  done; sleep 3' &
+  pid=$!
+
+  # 누수 의심 경고 발생 여부 확인
+  result=$(timeout 5s "$C" -d 1 -L "$pid" 2>/dev/null)
+
+  # 테스트 프로세스 정리
+  kill "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+
+  if [[ "$result" == *"POSSIBLE FD LEAK:"* ]]; then
+    echo yes
+  else
+    echo no
+  fi
+}
+
+testing "A1 leak detection" \
+  "fdstat_leak_test" "yes\n" "" ""
