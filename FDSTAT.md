@@ -111,10 +111,10 @@ PR 설명에 `Closes #이슈번호` 를 적으면 merge 될 때 이슈가 자동
 |---|---|---|
 | ✅ | 뼈대 | 옵션 문자열, 도움말, 함수 원형, 옵션 검증 테스트 4개 |
 | ✅ | `count_fds`, `show_pid` | `/proc/PID/fd` 순회, 개수 + 한도 대비 사용률 출력, 없는 PID·권한 에러 처리 |
-| ⬜ | `fd_type` | `readlink` 결과 접두사로 file/pipe/device/socket/anon_inode 판정, anon_inode 세분화 |
-| ⬜ | `sock_type` | `/proc/net/{tcp,tcp6,udp,udp6,unix,netlink}` 를 한 번 읽어 캐시, inode 로 종류 판정 |
-| ⬜ | `show_top` (`-n`) | `/proc` 전체 순회, FD 수 기준 정렬, 상위 N개 출력, 권한 없어 건너뛴 프로세스 수 표시 |
-| ⬜ | 테스트 | `sh -c 'exec 3</dev/null 4</dev/null; ...'` 로 FD 수를 고정해 비교, `-t`·`-n` 출력 확인 |
+| ✅ | `fd_type` | `readlink` 결과 접두사로 file/pipe/device/socket/anon_inode 판정, anon_inode 세분화 |
+| ✅ | `sock_type` | `/proc/net/{tcp,tcp6,udp,udp6,unix,netlink}` 를 한 번 읽어 캐시, inode 로 종류 판정 |
+| ✅ | `show_top` (`-n`) | `/proc` 전체 순회, FD 수 기준 정렬, 상위 N개 출력, 권한 없어 건너뛴 프로세스 수 표시 |
+| ✅ | 테스트 | `sh -c 'exec 3</dev/null 4</dev/null; ...'` 로 FD 수를 고정해 비교, `-t`·`-n` 출력 확인 |
 
 #### B2. fdstat 영역 B 확장 — 코드 80~115 / 테스트 40~60 · 이슈 [#10](https://github.com/Geon-NI/toybox/issues/10)
 | 상태 | 작업 | 내용 |
