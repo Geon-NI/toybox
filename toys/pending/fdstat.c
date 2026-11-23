@@ -57,31 +57,175 @@ GLOBALS(
  * ------------------------------------------------------------------ */
 
 // 시스템 전체 FD 통계 출력: /proc/sys/fs/file-nr, file-max, nr_open
+static void check_warn(char *name, long count, long limit);
+
 static void show_system(void)
 {
-  // TODO(나주한): 파싱 및 출력, -w 이면 file-max 대비 사용률 경고
+  static unsigned long long previous_used;
+  static int have_previous;
+  char buf[128];
+  unsigned long long allocated, unused, max, file_max, nr_open;
+  unsigned long long used;
+
+  if (!readfile("/proc/sys/fs/file-nr", buf, sizeof(buf)))
+    perror_exit("file-nr");
+  if (sscanf(buf, "%llu %llu %llu", &allocated, &unused, &max) != 3)
+    error_exit("invalid file-nr");
+
+  if (!readfile("/proc/sys/fs/file-max", buf, sizeof(buf)))
+    perror_exit("file-max");
+  if (sscanf(buf, "%llu", &file_max) != 1)
+    error_exit("invalid file-max");
+
+  if (!readfile("/proc/sys/fs/nr_open", buf, sizeof(buf)))
+    perror_exit("nr_open");
+  if (sscanf(buf, "%llu", &nr_open) != 1)
+    error_exit("invalid nr_open");
+
+  used = allocated >= unused ? allocated - unused : 0;
+
+
+  printf("Allocated: %llu\n", allocated);
+  printf("Unused:    %llu\n", unused);
+  printf("In use:    %llu\n", used);
+  printf("Max:       %llu\n", max);
+  printf("file-max:  %llu\n", file_max);
+  printf("nr_open:   %llu\n", nr_open);
+
+
+  if (FLAG(d)) {
+    if (have_previous) {
+      if (used >= previous_used)
+        printf("Change:    +%llu\n", used - previous_used);
+      else
+        printf("Change:    -%llu\n", previous_used - used);
+    } else {
+      puts("Change:    first sample");
+    }
+
+    previous_used = used;
+    have_previous = 1;
+  }
+
+
+  if (FLAG(w) && allocated >= unused &&
+      allocated - unused <= LONG_MAX && file_max <= LONG_MAX)
+    check_warn("system", (long)(allocated - unused),
+      (long)file_max);
 }
+
 
 // /proc/PID/limits 의 "Max open files" soft 한도를 반환.
 // 실패 시 -1, "unlimited" 면 0. (show_pid 는 -1 → "?", 0 → "-" 로 출력)
 // 영역 B 의 show_pid/show_top 에서도 사용률 계산에 쓴다.
+
 static long fd_limit(char *pid)
 {
-  // TODO(나주한): "Max open files" 줄 파싱, "unlimited" 처리
-  return -1;
+  FILE *fp;
+  char path[64], line[256], soft[64], *end;
+  long limit = -1;
+
+  // PID에 해당하는 limits 파일 경로 생성
+  if (snprintf(path, sizeof(path), "/proc/%s/limits", pid)
+      >= sizeof(path)) return -1;
+
+  if (!(fp = fopen(path, "r"))) return -1;
+
+  // 파일에서 Max open files 항목 찾기
+  while (fgets(line, sizeof(line), fp)) {
+    if (sscanf(line, "Max open files %63s", soft) != 1)
+      continue;
+
+    if (!strcmp(soft, "unlimited")) limit = 0;
+    else {
+      errno = 0;
+      limit = strtol(soft, &end, 10);
+      if (errno || end == soft || *end || limit < 0)
+        limit = -1;
+    }
+    break;
+  }
+
+  fclose(fp);
+  return limit;
 }
+
 
 // count 가 limit 의 TT.w% 를 넘으면 경고 출력 (-w)
 static void check_warn(char *name, long count, long limit)
 {
-  // TODO(나주한): 사용률 계산 및 경고 형식 결정
+  double usage;
+
+  if (!FLAG(w) || limit <= 0 || count < 0) return;
+
+  usage = 100.0 * count / limit;
+
+  if (usage > TT.w)
+    fprintf(stderr,
+      "WARNING: %s FD usage %.1f%% exceeds %ld%% (%ld/%ld)\n",
+      name, usage, TT.w, count, limit);
 }
 
 // -L: 직전 값들과 비교해 FD 수가 연속 증가 중인 PID 를 표시
 // -d 반복 사이에 PID 별 이전 개수와 증가 횟수를 기억해야 한다.
+
+struct leak_record {
+  long pid;
+  long previous;
+  int increases, seen;
+  struct leak_record *next;
+};
+
+static struct leak_record *leak_records;
+
+// PID별 FD 증가 이력 확인
 static void check_leak(long pid, long count)
 {
-  // TODO(나주한): PID 별 이력 저장(사라진 PID 정리 포함), 연속 증가 판정
+  struct leak_record *p;
+
+  // 기존 PID 기록 검색
+  for (p = leak_records; p; p = p->next)
+    if (p->pid == pid) break;
+
+  // 처음 관찰한 PID는 기록 생성
+  if (!p) {
+    p = xzalloc(sizeof(*p));
+    p->pid = pid;
+    p->previous = count;
+    p->seen = 1;
+    p->next = leak_records;
+    leak_records = p;
+    return;
+  }
+
+  p->seen = 1;
+
+  // FD 개수가 증가하면 연속 증가 횟수 누적
+  if (count > p->previous) p->increases++;
+  else p->increases = 0;
+
+  if (p->increases >= 2)
+    printf("POSSIBLE FD LEAK: PID %ld, "
+      "%d consecutive increases (%ld -> %ld)\n",
+      pid, p->increases, p->previous, count);
+
+  p->previous = count;
+}
+
+// 이번 측정에서 사라진 PID 기록 제거
+static void clean_leak_records(void)
+{
+  struct leak_record **pp = &leak_records, *p;
+
+  while ((p = *pp)) {
+    if (p->seen) {
+      p->seen = 0;
+      pp = &p->next;
+    } else {
+      *pp = p->next;
+      free(p);
+    }
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -259,6 +403,7 @@ static void show_pid(char *pid)
     return perror_msg("%s", pid);
   }
   print_row(pid, count, types);
+  if (FLAG(L)) check_leak(atol(pid), count);
   if (FLAG(l)) list_fds(pid);
 }
 
@@ -315,20 +460,43 @@ static void show_users(void)
  * 공통 (김건우): 옵션 검증과 모드 분기
  * ------------------------------------------------------------------ */
 
+
 void fdstat_main(void)
 {
   char **arg;
 
-  // 모드 충돌 검사 (-n 과 -U 동시 사용은 옵션 문자열의 [!nU] 가 막는다)
-  if ((FLAG(n) || FLAG(U)) && toys.optc) error_exit("-n/-U take no PID");
-  if (FLAG(L) && !FLAG(d)) error_exit("-L needs -d");
-  if (FLAG(l) && !toys.optc) error_exit("-l needs PID");
+  // 기존 옵션 검증
+  if ((FLAG(n) || FLAG(U)) && toys.optc)
+    error_exit("-n/-U take no PID");
+  if (FLAG(L) && !FLAG(d))
+    error_exit("-L needs -d");
+  if (FLAG(l) && !toys.optc)
+    error_exit("-l needs PID");
   if ((FLAG(u) || FLAG(c)) && !FLAG(n) && !FLAG(U))
     error_exit("-u/-c need -n or -U");
 
-  // TODO(나주한): -d 이면 아래 분기를 TT.d 초 간격 반복문으로 감싼다
-  if (FLAG(n)) show_top();
-  else if (FLAG(U)) show_users();
-  else if (toys.optc) for (arg = toys.optargs; *arg; arg++) show_pid(*arg);
-  else show_system();
+  // -d 옵션이 있으면 반복 실행
+  for (;;) {
+    if (FLAG(d)) {
+      printf("\n--- FD snapshot ---\n");
+      TT.hdr = 0;
+    }
+
+    if (FLAG(n)) show_top();
+    else if (FLAG(U)) show_users();
+    else if (toys.optc) {
+      for (arg = toys.optargs; *arg; arg++)
+        show_pid(*arg);
+    }
+    else show_system();
+
+    if (FLAG(L)) clean_leak_records();
+
+    // -d 옵션이 없으면 한 번 실행 후 종료
+    if (!FLAG(d)) break;
+
+    // 지정한 시간만큼 기다린 뒤 다시 실행
+    fflush(stdout);
+    sleep(TT.d);
+  }
 }
