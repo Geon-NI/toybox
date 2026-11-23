@@ -43,6 +43,7 @@ GLOBALS(
 
   // 여기부터는 옵션과 무관한 내부 상태
   int hdr;        // 프로세스 표 머리글을 이미 출력했으면 1
+  long uid;       // -u USER 를 main 에서 한 번 uid 로 바꿔 둔 값
 
   // 소켓 inode 캐시 (sock_type): 원소 = (inode << 4) | 종류, inode 순 정렬
   // -d 반복에서는 매 회차 sockread = 0 으로 되돌려 다시 읽게 해야 한다.
@@ -351,10 +352,50 @@ static long count_fds(char *pid, long *types)
   return count;
 }
 
-// -l: PID 의 FD 를 하나씩 출력 (번호, fd_type 결과, readlink 대상)
+// -l: PID 의 FD 를 번호 순으로 하나씩 출력 (번호, fd_type 결과, readlink 대상)
+//           FD  TYPE      TARGET
+//            0  dev       /dev/pts/0
+//            3  tcp       socket:[12345]
+// readdir 순서는 보장되지 않으므로 번호를 모아 정렬한다.
+// 링크를 못 읽으면 종류 unknown, 대상 "?". 그 사이 프로세스가 끝났으면 조용히 끝낸다.
 static void list_fds(char *pid)
 {
-  // TODO(김건우): /proc/PID/fd 순회하며 한 줄씩 출력
+  char buf[64];
+  struct dirent *de;
+  long long *fds = 0;
+  int n = 0, i;
+  DIR *dir;
+
+  sprintf(buf, "/proc/%s/fd", pid);
+  if (!(dir = opendir(buf))) return;
+  while ((de = readdir(dir))) {
+    if (!isdigit(*de->d_name)) continue;
+    if (!(n & 255)) fds = xrealloc(fds, (n+256)*sizeof(long long));
+    fds[n++] = atoll(de->d_name);
+  }
+  qsort(fds, n, sizeof(long long), cmp_ll);
+
+  printf("%10s  %-9s %s\n", "FD", "TYPE", "TARGET");
+  for (i = 0; i < n; i++) {
+    sprintf(buf, "%lld", fds[i]);
+    if (readlinkat0(dirfd(dir), buf, toybuf, sizeof(toybuf)))
+      printf("%10s  %-9s %s\n", buf, type_names[fd_type(toybuf)], toybuf);
+    else printf("%10s  %-9s ?\n", buf, type_names[FD_UNKNOWN]);
+  }
+  closedir(dir);
+  free(fds);
+}
+
+// -t 분류 줄: 0 이 아닌 종류만 "이름 개수" 로 한 줄에 (print_row, show_users 공용)
+//            file 5  pipe 2  tcp 30
+static void print_types(long *types)
+{
+  int i;
+
+  printf("%8s", "");
+  for (i = 0; i < FD_TYPES; i++)
+    if (types[i]) printf(" %s %ld ", type_names[i], types[i]);
+  xputc('\n');
 }
 
 // 프로세스 한 줄 출력 (show_pid, show_top 공용). -t 면 types 로 분류 줄 추가.
@@ -365,7 +406,6 @@ static void print_row(char *pid, long count, long *types)
 {
   char buf[64], *s;
   long limit;
-  int i;
 
   // 프로세스 이름. 읽는 사이 프로세스가 끝났으면 "?"
   sprintf(buf, "/proc/%s/comm", pid);
@@ -380,14 +420,7 @@ static void print_row(char *pid, long count, long *types)
     if (FLAG(w)) check_warn(pid, count, limit);
   } else printf("%8s %5s\n", limit ? "?" : "-", limit ? "?" : "-");
 
-  // -t: 0 이 아닌 종류만 "이름 개수" 로 한 줄에
-  //         file 5  pipe 2  tcp 30
-  if (FLAG(t)) {
-    printf("%8s", "");
-    for (i = 0; i < FD_TYPES; i++)
-      if (types[i]) printf(" %s %ld ", type_names[i], types[i]);
-    xputc('\n');
-  }
+  if (FLAG(t)) print_types(types);
 }
 
 // 지정한 PID 하나의 FD 정보를 출력 (개수, 한도 대비 사용률, -t 분류, -l 목록)
@@ -402,16 +435,40 @@ static void show_pid(char *pid)
     if (errno == ENOENT) return error_msg("%s: no such process", pid);
     return perror_msg("%s", pid);
   }
+  // -l 은 PID 마다 FD 목록이 붙으므로 블록 사이를 빈 줄로 띄우고 머리글을 다시 찍는다
+  if (FLAG(l) && TT.hdr) {
+    xputc('\n');
+    TT.hdr = 0;
+  }
   print_row(pid, count, types);
   if (FLAG(L)) check_leak(atol(pid), count);
   if (FLAG(l)) list_fds(pid);
 }
 
+// /proc/PID 디렉터리 소유자 = 프로세스의 실효 uid. 프로세스가 없으면 -1.
+static long proc_uid(char *pid)
+{
+  struct stat st;
+  char buf[64];
+
+  sprintf(buf, "/proc/%s", pid);
+  return stat(buf, &st) ? -1 : st.st_uid;
+}
+
 // -u/-c 필터: 집계 대상 프로세스면 1. 필터가 없으면 항상 1.
+// 확인하는 사이 프로세스가 끝났으면 0 (집계에서 빠짐).
 static int match_proc(char *pid)
 {
-  // TODO(김건우): -u 는 /proc/PID 소유 uid 와 비교 (USER 이름은 main 에서
-  //               한 번만 uid 로 변환), -c 는 /proc/PID/comm 과 비교
+  char buf[64];
+
+  if (FLAG(u) && proc_uid(pid) != TT.uid) return 0;
+  if (FLAG(c)) {
+    sprintf(buf, "/proc/%s/comm", pid);
+    if (!readfile(buf, toybuf, sizeof(toybuf))) return 0;
+    chomp(toybuf);
+    if (strcmp(toybuf, TT.c)) return 0;
+  }
+
   return 1;
 }
 
@@ -450,10 +507,65 @@ static void show_top(void)
   free(top);
 }
 
-// -U: 사용자(uid)별 FD 합계 출력 (match_proc 통과한 것만)
+// -U 집계 단위: 사용자 하나의 프로세스 수, FD 합계, (-t) 종류별 합계
+struct fd_user {
+  long uid, procs, fds, types[FD_TYPES];
+};
+
+// FD 합계 내림차순
+static int cmp_user(const void *a, const void *b)
+{
+  long x = ((struct fd_user *)a)->fds, y = ((struct fd_user *)b)->fds;
+
+  return (x < y) - (x > y);
+}
+
+// -U: 사용자(uid)별 FD 합계 출력 (match_proc 통과한 것만), FD 많은 순
+//   USER             PROCS      FDS
+//   root                42     1234
+//            file 5  pipe 2  tcp 30      (-t)
+// 사용자는 보통 몇 명 안 되므로 선형 탐색으로 찾는다.
+// 권한이 없어 FD 를 못 센 프로세스는 show_top 처럼 개수만 stderr 로 알린다.
 static void show_users(void)
 {
-  // TODO(김건우): /proc 순회하며 uid 별 누적, 많은 순 정렬, 이름으로 출력
+  struct fd_user *users = 0, *u;
+  long c, uid, types[FD_TYPES];
+  int n = 0, i, j, skip = 0;
+  struct dirent *de;
+  DIR *dir;
+
+  if (!(dir = opendir("/proc"))) perror_exit("/proc");
+  while ((de = readdir(dir))) {
+    if (!isdigit(*de->d_name) || !match_proc(de->d_name)) continue;
+    if ((uid = proc_uid(de->d_name)) < 0) continue;   // 그 사이 종료됨
+    memset(types, 0, sizeof(types));
+    if ((c = count_fds(de->d_name, FLAG(t) ? types : 0)) < 0) {
+      if (errno != ENOENT) skip++;
+      continue;
+    }
+
+    for (i = 0; i < n && users[i].uid != uid; i++);
+    if (i == n) {
+      if (!(n & 15)) users = xrealloc(users, (n+16)*sizeof(*users));
+      memset(users+n++, 0, sizeof(*users));
+      users[i].uid = uid;
+    }
+    u = users+i;
+    u->procs++;
+    u->fds += c;
+    for (j = 0; j < FD_TYPES; j++) u->types[j] += types[j];
+  }
+  closedir(dir);
+
+  qsort(users, n, sizeof(*users), cmp_user);
+  for (i = 0; i < n; i++) {
+    if (!TT.hdr++) printf("%-15s %6s %8s\n", "USER", "PROCS", "FDS");
+    printf("%-15s %6ld %8ld\n", getusername(users[i].uid), users[i].procs,
+      users[i].fds);
+    if (FLAG(t)) print_types(users[i].types);
+  }
+  if (skip) fprintf(stderr, "(%d processes not readable)\n", skip);
+  free(users);
 }
 
 /* ------------------------------------------------------------------ *
@@ -475,11 +587,15 @@ void fdstat_main(void)
   if ((FLAG(u) || FLAG(c)) && !FLAG(n) && !FLAG(U))
     error_exit("-u/-c need -n or -U");
 
+  // -u 는 이름이나 숫자 uid. 매 프로세스마다 변환하지 않도록 한 번만.
+  if (FLAG(u)) TT.uid = xgetuid(TT.u);
+
   // -d 옵션이 있으면 반복 실행
   for (;;) {
     if (FLAG(d)) {
       printf("\n--- FD snapshot ---\n");
       TT.hdr = 0;
+      TT.sockread = 0;    // 소켓은 회차마다 바뀌므로 /proc/net 을 다시 읽게 한다
     }
 
     if (FLAG(n)) show_top();
