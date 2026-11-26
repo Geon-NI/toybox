@@ -129,8 +129,9 @@ PR 설명에 `Closes #이슈번호` 를 적으면 merge 될 때 이슈가 자동
 `lsof.c` 와 `netstat.c` 가 `/proc/net/*` 파싱을 각자 중복 구현하고 있고, fdstat 도 같은 기능이 필요하다.
 | 상태 | 작업 | 내용 |
 |---|---|---|
-| ⬜ | `lib/` 함수 추가 | PID 별 FD 순회, 소켓 inode → 종류/주소 조회 |
-| ⬜ | 적용 | fdstat · lsof · netstat 이 공용 함수를 쓰도록 수정 (동작 변화 없음을 테스트로 확인) |
+| ✅ | `lib/proc.c` 추가 | `proc_fds` (PID 별 FD 를 번호 순으로 순회), `proc_net` (`/proc/net` 테이블 한 줄씩 파싱), `proc_sock` (inode → 소켓 정보, 정렬 캐시) |
+| ✅ | 적용 | fdstat · lsof · netstat 이 공용 함수를 쓰도록 수정. 바꾸기 전 바이너리와 출력 비교로 동작이 그대로인지 확인 |
+| ✅ | lsof 버그 | `inet_ntop()` 에 `AF_INET` 대신 4/6 을 넘겨 IP 주소가 항상 비어 나오던 문제 (공용 lib 적용으로 해결) |
 
 #### B4. `lsof` 정리 (`toys/pending/lsof.c`) — 코드 150~250 / 테스트 80~120 · 이슈 [#12](https://github.com/Geon-NI/toybox/issues/12)
 | 상태 | 작업 | 내용 |
