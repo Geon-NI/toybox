@@ -143,8 +143,8 @@ PR 설명에 `Closes #이슈번호` 를 적으면 merge 될 때 이슈가 자동
 #### B5. `column` 신규 명령 ([#591](https://github.com/landley/toybox/issues/591)) — 코드 200~300 / 테스트 60~100 · 이슈 [#13](https://github.com/Geon-NI/toybox/issues/13)
 | 상태 | 작업 | 내용 |
 |---|---|---|
-| ⬜ | 구현 | `toys/pending/column.c`. `-t`, `-s`, `-o`, `-c`, `-x`, `-N`, `-R` |
-| ⬜ | 테스트 | util-linux `column` 출력과 비교 |
+| ✅ | 구현 | `toys/pending/column.c`. `-t`, `-s`, `-o`, `-c`, `-x`, `-N`, `-R`, `-L` (화면 칸 기준 UTF-8 너비) |
+| ✅ | 테스트 | `tests/column.test` 43개. 기대값은 util-linux 2.39 출력으로 확인했고, 일부러 다르게 둔 3가지는 테스트 끝에 따로 표시 |
 
 #### B6. `/proc` 명령 버그 수정·테스트 — 코드 5~15 / 테스트 120~190 · 이슈 [#14](https://github.com/Geon-NI/toybox/issues/14)
 | 상태 | 작업 | 내용 |
