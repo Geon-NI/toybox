@@ -39,7 +39,7 @@ struct file_info {
 
   // For output.
   struct proc_info pi;
-  char *name, fd[8], rw, locks, type[10], device[32], size_off[32], node[32];
+  char *name, fd[12], rw, locks, type[10], device[32], size_off[32], node[32];
 
   // For filtering.
   struct dev_ino di;
@@ -86,14 +86,16 @@ static void free_info(void *data)
   free(data);
 }
 
+// Fill rw mode and offset from /proc/PID/fdinfo/FD
 static void fill_flags(struct file_info *fi)
 {
-  FILE* fp;
+  char path[64];
+  FILE *fp;
   long long pos;
   unsigned flags;
 
-  snprintf(toybuf, sizeof(toybuf), "/proc/%d/fdinfo/%s", fi->pi.pid, fi->fd);
-  if (!(fp = fopen(toybuf, "r"))) return;
+  sprintf(path, "/proc/%d/fdinfo/%s", fi->pi.pid, fi->fd);
+  if (!(fp = fopen(path, "r"))) return;
 
   if (fscanf(fp, "pos: %lld flags: %o", &pos, &flags) == 2) {
     flags &= O_ACCMODE;
@@ -146,7 +148,8 @@ static void find_socket(struct file_info *fi, long long inode)
   }
 }
 
-static void fill_stat(struct file_info *fi, const char *path)
+// Fill TYPE, DEVICE, SIZE/OFF and NODE by following path
+static void fill_stat(struct file_info *fi, char *path)
 {
   struct stat sb;
   long dev;
@@ -188,7 +191,7 @@ static void fill_stat(struct file_info *fi, const char *path)
   fi->di.ino = sb.st_ino;
 }
 
-struct file_info *new_file_info(struct proc_info *pi, const char *fd)
+static struct file_info *new_file_info(struct proc_info *pi, char *fd)
 {
   struct file_info *fi = xzalloc(sizeof(struct file_info));
 
@@ -197,66 +200,50 @@ struct file_info *new_file_info(struct proc_info *pi, const char *fd)
   fi->pi = *pi;
 
   // Defaults.
-  strcpy(fi->fd, fd);
+  snprintf(fi->fd, sizeof(fi->fd), "%s", fd);
   strcpy(fi->type, "unknown");
   fi->rw = fi->locks = ' ';
 
   return fi;
 }
 
-static void visit_symlink(struct proc_info *pi, char *name, char *path)
+// One /proc/PID/LINK entry: cwd, root and exe (fd = their FD column name),
+// or fd/N (fd NULL)
+static void visit_symlink(struct proc_info *pi, char *fd, char *link)
 {
-  struct file_info *fi = new_file_info(pi, "");
+  struct file_info *fi = new_file_info(pi, fd ? : link);
+  char path[64];
 
-  // Get NAME.
-  if (name) { // "/proc/pid/[cwd]".
-    snprintf(fi->fd, sizeof(fi->fd), "%s", name);
-    snprintf(toybuf, sizeof(toybuf), "/proc/%d/%s", pi->pid, path);
-  } else { // "/proc/pid/fd/[3]"
-    snprintf(fi->fd, sizeof(fi->fd), "%s", path);
-    fill_flags(fi); // Clobbers toybuf.
-    snprintf(toybuf, sizeof(toybuf), "/proc/%d/fd/%s", pi->pid, path);
-  }
-  // TODO: code called by fill_stat would be easier to write if we didn't
-  // rely on toybuf being preserved here.
-  fill_stat(fi, toybuf);
-  if (!fi->name) { // We already have a name for things like sockets.
-    fi->name = xreadlink(toybuf);
-    if (!fi->name) {
-      fi->name = xmprintf("%s (readlink: %s)", toybuf, strerror(errno));
-    }
-  }
+  sprintf(path, "/proc/%d/%s%s", pi->pid, fd ? "" : "fd/", link);
+  if (!fd) fill_flags(fi);
+  fill_stat(fi, path);
+  if (!fi->name && !(fi->name = xreadlink(path))) // Sockets already have one
+    fi->name = xmprintf("%s (readlink: %s)", path, strerror(errno));
 }
 
+// Files mapped into memory (executable, shared libraries...), FD column "mem"
 static void visit_maps(struct proc_info *pi)
 {
   FILE *fp;
   unsigned long long offset;
   long inode;
-  char *line = NULL, device[10]; // xxx:xxxxx\0
-  size_t line_length = 0;
+  char path[64], *line, device[10]; // xxx:xxxxx\0
   struct file_info *fi;
+  int pos;
 
-  snprintf(toybuf, sizeof(toybuf), "/proc/%d/maps", pi->pid);
-  fp = fopen(toybuf, "r");
-  if (!fp) return;
-
-  while (getline(&line, &line_length, fp) > 0) {
-    int name_pos;
-
-    if (sscanf(line, "%*x-%*x %*s %llx %9s %ld %n",
-               &offset, device, &inode, &name_pos) >= 3) {
-      // Ignore non-file maps.
-      if (inode == 0 || !strcmp(device, "00:00")) continue;
-      // TODO: show unique maps even if they have a non-zero offset?
-      if (offset != 0) continue;
-
+  sprintf(path, "/proc/%d/maps", pi->pid);
+  if (!(fp = fopen(path, "r"))) return;
+  while ((line = xgetline(fp))) {
+    // Only file maps (not anonymous/heap/stack), once each (at offset 0)
+    // TODO: show unique maps even if they have a non-zero offset?
+    pos = 0;
+    if (sscanf(line, "%*x-%*x %*s %llx %9s %ld %n", &offset, device, &inode,
+        &pos) >= 3 && pos && inode && strcmp(device, "00:00") && !offset) {
       fi = new_file_info(pi, "mem");
-      fi->name = strdup(chomp(line + name_pos));
-      fill_stat(fi, fi->name);
+      fill_stat(fi, fi->name = xstrdup(line+pos));
     }
+    free(line);
   }
-  free(line);
   fclose(fp);
 }
 
