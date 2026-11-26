@@ -1,0 +1,144 @@
+#!/bin/bash
+
+[ -f testing.sh ] && . testing.sh
+
+#testing "name" "command" "result" "infile" "stdin"
+
+# 테스트 명령은 서브셸에서 돌기 때문에 $$ 대신 $BASHPID 로 "지금 이 셸" 을 가리킨다.
+# 셸에서 exec N<파일 로 FD 를 고정해 두고, 그 FD 의 줄만 골라 비교한다.
+# lsof 자신도 셸의 FD 를 물려받으므로, 파일 인자로 찾는 테스트는 lsof 쪽에서
+# N<&- 로 닫아 자기 자신이 결과에 섞이지 않게 한다.
+#
+# 줄 형식: COMMAND PID USER FD(+rw) TYPE DEVICE SIZE/OFF NODE NAME
+# fdline PID FD 열번호... : FD 칸이 일치하는 줄에서 지정한 열만 출력
+fdline() {
+  local p=$1 f=$2; shift 2
+  "$C" -p $p | awk -v f="$f" -v c="$*" \
+    'BEGIN{n=split(c,a," ")} $4==f{s=$a[1]; for(i=2;i<=n;i++) s=s" "$a[i]; print s}'
+}
+
+echo hello > file
+
+testcmd "header" "-p \$BASHPID | head -n1" \
+  "COMMAND     PID       USER   FD      TYPE             DEVICE  SIZE/OFF       NODE NAME\n" "" ""
+testing "PID and COMMAND columns" \
+  "P=\$BASHPID; exec 3</dev/null; [ \"\$(fdline \$P 3r 1 2)\" = \"\$(cat /proc/\$P/comm) \$P\" ] && echo yes" \
+  "yes\n" "" ""
+
+# FD 칸: 번호 + 접근 모드 (r 읽기, w 쓰기, u 읽기쓰기)
+testing "read-only FD" "P=\$BASHPID; exec 3</dev/null; fdline \$P 3r 4 5 9" \
+  "3r CHR /dev/null\n" "" ""
+testing "write-only FD" \
+  "P=\$BASHPID; exec 4>>file; fdline \$P 4w 4 5 | grep -c REG" "1\n" "" ""
+testing "read-write FD" "P=\$BASHPID; exec 5<>file; fdline \$P 5u 4 5" \
+  "5u REG\n" "" ""
+testing "NAME is absolute path" \
+  "P=\$BASHPID; exec 5<file; [ \"\$(fdline \$P 5r 9)\" = \"\$PWD/file\" ] && echo yes" \
+  "yes\n" "" ""
+# 일반 파일은 SIZE/OFF 에 크기, 문자 장치는 0t<오프셋>
+testing "SIZE/OFF of file" "P=\$BASHPID; exec 5<file; fdline \$P 5r 7" \
+  "6\n" "" ""
+testing "SIZE/OFF of device" "P=\$BASHPID; exec 3</dev/null; fdline \$P 3r 7" \
+  "0t0\n" "" ""
+testing "DEVICE of /dev/null" "P=\$BASHPID; exec 3</dev/null; fdline \$P 3r 6" \
+  "1,3\n" "" ""
+testing "NODE is inode" \
+  "P=\$BASHPID; exec 5<file; [ \"\$(fdline \$P 5r 8)\" = \"\$(stat -c %i file)\" ] && echo yes" \
+  "yes\n" "" ""
+testing "pipe" "P=\$BASHPID; exec 6< <(:); fdline \$P 6r 5 9 | sed 's/[0-9][0-9]*/N/'" \
+  "FIFO pipe:[N]\n" "" ""
+testing "closed FD not listed" \
+  "P=\$BASHPID; exec 5<file; exec 5<&-; fdline \$P 5r 4 | wc -l" "0\n" "" ""
+
+# cwd / rtd / txt 줄
+testing "cwd" "P=\$BASHPID; [ \"\$(fdline \$P cwd 5 9)\" = \"DIR \$PWD\" ] && echo yes" \
+  "yes\n" "" ""
+testing "rtd" "P=\$BASHPID; fdline \$P rtd 5 9" "DIR /\n" "" ""
+testing "txt" \
+  "P=\$BASHPID; [ \"\$(fdline \$P txt 9)\" = \"\$(readlink /proc/\$P/exe)\" ] && echo yes" \
+  "yes\n" "" ""
+
+# FILE 인자: 그 파일을 연 프로세스만
+# 셸이 연 FD 는 같은 파이프라인의 awk, $(...) 서브셸에도 물려지므로
+# "그 파일을 연 프로세스가 우리 셸뿐" 이라고 가정하지 않고 우리 셸 줄만 본다.
+testing "FILE filter" \
+  "P=\$BASHPID; exec 7<file; \"\$C\" file 7<&- | awk -v p=\$P '\$2==p{print \$4}'" \
+  "7r\n" "" ""
+testing "FILE filter skips others" \
+  "P=\$BASHPID; \"\$C\" file | awk -v p=\$P '\$2==p' | wc -l" "0\n" "" ""
+testcmd "FILE that doesn't exist" "nosuchfile 2>/dev/null || echo err" \
+  "err\n" "" ""
+
+# -t: PID 만, 프로세스마다 한 번씩
+testing "-t" "P=\$BASHPID; exec 7<file; \"\$C\" -t file 7<&- | grep -cx \$P" \
+  "1\n" "" ""
+testing "-t prints PID once" \
+  "P=\$BASHPID; exec 7<file 8<file; \"\$C\" -t file 7<&- 8<&- | grep -cx \$P" \
+  "1\n" "" ""
+testing "-t -p" "P=\$BASHPID; [ \"\$(\"\$C\" -t -p \$P)\" = \$P ] && echo yes" \
+  "yes\n" "" ""
+
+# -p: 쉼표로 여러 PID, 같은 옵션 여러 번
+testing "-p list" "\"\$C\" -t -p \$BASHPID,\$PPID | wc -l" "2\n" "" ""
+testing "-p twice" "\"\$C\" -t -p \$BASHPID -p \$PPID | wc -l" "2\n" "" ""
+testcmd "-p no such process" "-p 999999999 | wc -l" "0\n" "" ""
+# 숫자가 아닌 값은 에러만 내고 조회하지 않는다 (예전엔 "1x" 를 PID 1 로 조회)
+testcmd "-p bad value" "-p 1x 2>&1; echo \$?" "lsof: bad -p '1x'\n1\n" "" ""
+testcmd "-p zero" "-p 0 2>&1; echo \$?" "lsof: bad -p '0'\n1\n" "" ""
+testing "-p bad value skipped" \
+  "P=\$BASHPID; \"\$C\" -t -p x,\$P 2>/dev/null | grep -cx \$P" "1\n" "" ""
+
+# -l: USER 칸에 이름 대신 uid 숫자
+testing "-l" "P=\$BASHPID; exec 3</dev/null; [ \"\$(\"\$C\" -l -p \$P | awk '\$4==\"3r\"{print \$3}')\" = \$(id -u) ] && echo yes" \
+  "yes\n" "" ""
+testing "USER without -l" "P=\$BASHPID; exec 3</dev/null; [ \"\$(fdline \$P 3r 3)\" = \"\$(id -un | cut -c1-10)\" ] && echo yes" \
+  "yes\n" "" ""
+
+# 권한 없는 프로세스는 NOFD 줄로 이유를 보여 준다 (root 는 다 읽을 수 있음)
+skipnot [ $(id -u) -ne 0 ]
+testcmd "NOFD for unreadable process" "-p 1 | grep -c 'NOFD.*Permission denied'" \
+  "1\n" "" ""
+
+# 소켓: 셸만으로는 listen 소켓을 만들 수 없어서 python3 로 소켓을 연 채 lsof 실행
+# (python 의 subprocess 는 기본적으로 FD 를 물려주지 않아 lsof 자신은 섞이지 않음)
+# 출력: TYPE NAME. 포트 번호는 실행마다 다르므로 PORT 로 바꾼다.
+sock() {
+  python3 - "$C" <<EOF
+import os, socket, subprocess, sys
+$1
+out = subprocess.run([sys.argv[1], '-p', str(os.getpid())],
+  capture_output=True, text=True).stdout
+name = s.getsockname()
+for l in out.splitlines()[1:]:
+  f = l.split(None, 7)
+  if f[3] == '%du' % s.fileno():
+    if type(name) == tuple: f[7] = f[7].replace(':%d' % name[1], ':PORT')
+    print(f[4], f[7])
+EOF
+}
+
+# skipnot 은 인자를 eval 로 다시 이어 붙이므로 빈 인자('')나 따옴표가 깨진다 → 함수로 감싼다
+has_python() { python3 -c pass; }
+has_ipv6() { python3 -c 'import socket; socket.socket(socket.AF_INET6).bind(("::1", 0))'; }
+
+skipnot has_python
+testing "tcp address" \
+  "sock 's=socket.socket(); s.bind((\"127.0.0.1\", 0)); s.listen()'" \
+  "IPv4 TCP 127.0.0.1:PORT->0.0.0.0:0 (LISTEN)\n" "" ""
+skipnot has_python
+testing "udp address" \
+  "sock 's=socket.socket(type=socket.SOCK_DGRAM); s.bind((\"127.0.0.1\", 0))'" \
+  "IPv4 UDP 127.0.0.1:PORT->0.0.0.0:0\n" "" ""
+skipnot has_ipv6
+testing "tcp6 address" \
+  "sock 's=socket.socket(socket.AF_INET6); s.bind((\"::1\", 0)); s.listen()'" \
+  "IPv6 TCP [::1]:PORT->[::]:0 (LISTEN)\n" "" ""
+skipnot has_python
+testing "unix socket path" \
+  "sock 's=socket.socket(socket.AF_UNIX); s.bind(os.getcwd()+\"/sock\"); s.listen()' | sed \"s@\$PWD@PWD@\"; rm -f sock" \
+  "unix PWD/sock\n" "" ""
+skipnot has_python
+testing "unnamed unix socket" \
+  "sock 's, t = socket.socketpair()'" "unix socket\n" "" ""
+
+rm -f file

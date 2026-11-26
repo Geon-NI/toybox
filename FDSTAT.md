@@ -136,8 +136,9 @@ PR 설명에 `Closes #이슈번호` 를 적으면 merge 될 때 이슈가 자동
 #### B4. `lsof` 정리 (`toys/pending/lsof.c`) — 코드 150~250 / 테스트 80~120 · 이슈 [#12](https://github.com/Geon-NI/toybox/issues/12)
 | 상태 | 작업 | 내용 |
 |---|---|---|
-| ⬜ | 정리 | `www/cleanup.html` 기준 정리, B3 공용 함수 적용, 옵션·출력 버그 수정 |
-| ⬜ | 테스트 신규 | 현재 `tests/lsof.test` 없음. `-p`, `-t` 등 FD 를 고정한 셸로 확인 |
+| ✅ | 테스트 신규 | `tests/lsof.test` 35개: FD 칸(모드/종류/장치/크기/inode/이름), cwd·rtd·txt, FILE 인자, `-t`, `-p`, `-l`, NOFD, 소켓 주소 (python3 있을 때) |
+| ✅ | 버그 수정 | `-l` 미구현, `-p 1x` 가 에러를 내고도 PID 1 을 조회하던 문제 |
+| ✅ | 정리 | `toybuf` 돌려쓰기 제거(경로는 지역 버퍼), `visit_symlink`/`visit_maps` 단순화, `new_file_info` static, FD 칸 넘침 방지 |
 
 #### B5. `column` 신규 명령 ([#591](https://github.com/landley/toybox/issues/591)) — 코드 200~300 / 테스트 60~100 · 이슈 [#13](https://github.com/Geon-NI/toybox/issues/13)
 | 상태 | 작업 | 내용 |
