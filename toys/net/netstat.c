@@ -126,127 +126,101 @@ static void addr2str(int af, void *addr, unsigned port, char *buf, int len,
   else sprintf(buf+pos, port ? ":%u" : ":*", port);
 }
 
-// Display info for tcp/udp/raw
-static void show_ip(char *fname)
+// Display info for tcp/udp/raw (proc_net() callback)
+static void show_ip(struct proc_sock *ps, void *unused)
 {
-  char *ss_state = "UNKNOWN", buf[12], *s, *label = strrchr(fname, '/')+1;
+  char *ss_state = "UNKNOWN", buf[12], *s, *label = ps->name;
+  char lip[256], rip[256];
   char *state_label[] = {"", "ESTABLISHED", "SYN_SENT", "SYN_RECV", "FIN_WAIT1",
                          "FIN_WAIT2", "TIME_WAIT", "CLOSE", "CLOSE_WAIT",
                          "LAST_ACK", "LISTEN", "CLOSING", "UNKNOWN"};
-  FILE *fp = xfopen(fname, "r");
+  unsigned state = ps->state;
 
-  // Skip header.
-  (void)fgets(toybuf, sizeof(toybuf), fp);
+  // Should we display this? (listening or all or TCP/UDP/RAW)
+  if (!(FLAG(l) && (!ps->rport && (state&0xA))) && !FLAG(a)
+      && !(ps->rport&0x70)) return;
 
-  while (fgets(toybuf, sizeof(toybuf), fp)) {
-    char lip[256], rip[256];
-    union {
-      struct {unsigned u; unsigned char b[4];} i4;
-      struct {struct {unsigned a, b, c, d;} u; unsigned char b[16];} i6;
-    } laddr, raddr;
-    unsigned lport, rport, state, txq, rxq, num, uid, af = AF_INET6;
-    unsigned long inode;
+  addr2str(ps->af, ps->laddr, ps->lport, lip, TT.wpad, label);
+  addr2str(ps->af, ps->raddr, ps->rport, rip, TT.wpad, label);
 
-    // Try ipv6, then try ipv4
-    if (16 != sscanf(toybuf,
-      " %d: %8x%8x%8x%8x:%x %8x%8x%8x%8x:%x %x %x:%x %*X:%*X %*X %d %*d %ld",
-      &num, &laddr.i6.u.a, &laddr.i6.u.b, &laddr.i6.u.c,
-      &laddr.i6.u.d, &lport, &raddr.i6.u.a, &raddr.i6.u.b,
-      &raddr.i6.u.c, &raddr.i6.u.d, &rport, &state, &txq, &rxq,
-      &uid, &inode))
-    {
-      af = AF_INET;
-      if (10 != sscanf(toybuf,
-        " %d: %x:%x %x:%x %x %x:%x %*X:%*X %*X %d %*d %ld",
-        &num, &laddr.i4.u, &lport, &raddr.i4.u, &rport, &state, &txq,
-        &rxq, &uid, &inode)) continue;
-    }
+  // Display data
+  s = label;
+  if (strstart(&s, "tcp")) {
+    int sz = ARRAY_LEN(state_label);
+    if (!state || state >= sz) state = sz-1;
+    ss_state = state_label[state];
+  } else if (strstart(&s, "udp")) {
+    if (state == 1) ss_state = state_label[state];
+    else if (state == 7) ss_state = "";
+  } else if (strstart(&s, "raw")) sprintf(ss_state = buf, "%u", state);
 
-    // Should we display this? (listening or all or TCP/UDP/RAW)
-    if (!(FLAG(l) && (!rport && (state&0xA))) && !FLAG(a) && !(rport&0x70))
-      continue;
-
-    addr2str(af, &laddr, lport, lip, TT.wpad, label);
-    addr2str(af, &raddr, rport, rip, TT.wpad, label);
-
-    // Display data
-    s = label;
-    if (strstart(&s, "tcp")) {
-      int sz = ARRAY_LEN(state_label);
-      if (!state || state >= sz) state = sz-1;
-      ss_state = state_label[state];
-    } else if (strstart(&s, "udp")) {
-      if (state == 1) ss_state = state_label[state];
-      else if (state == 7) ss_state = "";
-    } else if (strstart(&s, "raw")) sprintf(ss_state = buf, "%u", state);
-
-    printf("%-6s%6d%7d %*.*s %*.*s %-11s", label, rxq, txq, -TT.wpad, TT.wpad,
-      lip, -TT.wpad, TT.wpad, rip, ss_state);
-    if (FLAG(e)) {
-      if (FLAG(n)) sprintf(s = toybuf, "%d", uid);
-      else s = getusername(uid);
-      printf(" %-10s %-11ld", s, inode);
-    }
-    if (FLAG(p)) {
-      struct num_cache *nc = get_num_cache(TT.inodes, inode);
-
-      printf(" %s", nc ? nc->data : "-");
-    }
-    xputc('\n');
+  printf("%-6s%6d%7d %*.*s %*.*s %-11s", label, ps->rxq, ps->txq, -TT.wpad,
+    TT.wpad, lip, -TT.wpad, TT.wpad, rip, ss_state);
+  if (FLAG(e)) {
+    if (FLAG(n)) sprintf(s = toybuf, "%d", ps->uid);
+    else s = getusername(ps->uid);
+    printf(" %-10s %-11lld", s, ps->inode);
   }
-  fclose(fp);
+  if (FLAG(p)) {
+    struct num_cache *nc = get_num_cache(TT.inodes, ps->inode);
+
+    printf(" %s", nc ? nc->data : "-");
+  }
+  xputc('\n');
 }
 
-static void show_unix_sockets(void)
+// Display info for unix sockets (proc_net() callback)
+static void show_unix(struct proc_sock *ps, void *unused)
 {
   char *types[] = {"","STREAM","DGRAM","RAW","RDM","SEQPACKET","DCCP","PACKET"},
-       *states[] = {"","LISTENING","CONNECTING","CONNECTED","DISCONNECTING"},
-       *filename = 0;
-  unsigned long refcount, flags, type, state, inode;
-  FILE *fp = xfopen("/proc/net/unix", "r");
+       *states[] = {"","LISTENING","CONNECTING","CONNECTED","DISCONNECTING"};
+  unsigned long flags = ps->flags, type = ps->type, state = ps->state;
 
-  // Skip header.
-  (void)fgets(toybuf, sizeof(toybuf), fp);
+  // Linux exports only SO_ACCEPTCON since 2.3.15pre3 in 1999, but let's
+  // filter in case they add more someday.
+  flags &= 1<<16;
 
-  while (fscanf(fp, "%*p: %lX %*X %lX %lX %lX %lu%m[^\n]", &refcount, &flags,
-                &type, &state, &inode, &filename) >= 5) {
-    // Linux exports only SO_ACCEPTCON since 2.3.15pre3 in 1999, but let's
-    // filter in case they add more someday.
-    flags &= 1<<16;
+  // Only show unconnected listening sockets with -a or -l.
+  if (state==1 && flags && !(FLAG(a) || FLAG(l))) return;
 
-    // Only show unconnected listening sockets with -a or -l.
-    if (state==1 && flags && !(FLAG(a) || FLAG(l))) continue;
+  if (type==10) type = 7; // move SOCK_PACKET into line
+  if (type>=ARRAY_LEN(types)) type = 0;
+  if (state>=ARRAY_LEN(states) || (state==1 && !flags)) state = 0;
 
-    if (type==10) type = 7; // move SOCK_PACKET into line
-    if (type>=ARRAY_LEN(types)) type = 0;
-    if (state>=ARRAY_LEN(states) || (state==1 && !flags)) state = 0;
+  if (state!=1 && FLAG(l)) return;
 
-    if (state!=1 && FLAG(l)) continue;
+  sprintf(toybuf, "[ %s]", flags ? "ACC " : "");
+  printf("unix  %-6ld %-11s %-10s %-13s %-8llu ",
+    ps->refcount, toybuf, types[type], states[state], ps->inode);
+  if (FLAG(p)) {
+    struct num_cache *nc = get_num_cache(TT.inodes, ps->inode);
 
-    sprintf(toybuf, "[ %s]", flags ? "ACC " : "");
-    printf("unix  %-6ld %-11s %-10s %-13s %-8lu ",
-      refcount, toybuf, types[type], states[state], inode);
-    if (FLAG(p)) {
-      struct num_cache *nc = get_num_cache(TT.inodes, inode);
-
-      printf("%-19.19s ", nc ? nc->data : "-");
-    }
-
-    if (filename) {
-      printf("%s\n", filename+!FLAG(p));
-      free(filename);
-      filename = 0;
-    } else xputc('\n');
+    printf("%-19.19s ", nc ? nc->data : "-");
   }
-  fclose(fp);
+  if (ps->path) printf(" %s\n"+!FLAG(p), ps->path);
+  else xputc('\n');
+}
+
+static void show_net(char *name, void (*fn)(struct proc_sock *, void *))
+{
+  if (proc_net(name, fn, 0)) perror_exit("No file /proc/net/%s", name);
+}
+
+// proc_fds() callback: remember which PID/program owns each socket inode
+static void add_inode(int dirfd, char *fd, void *name)
+{
+  char *s = toybuf;
+
+  if (!readlinkat0(dirfd, fd, s, sizeof(toybuf))) return;
+  // Can the "[0000]:" happen in a modern kernel?
+  if (strstart(&s, "socket:[") || strstart(&s, "[0000]:"))
+    add_num_cache(&TT.inodes, atoll(s), name, strlen(name)+1);
 }
 
 static int scan_pids(struct dirtree *node)
 {
-  char *s = toybuf+256;
-  struct dirent *entry;
-  DIR *dp;
-  int pid, dirfd;
+  char *name;
+  int pid;
 
   if (!node->parent) return DIRTREE_RECURSE;
   if (!(pid = atol(node->name))) return 0;
@@ -254,21 +228,9 @@ static int scan_pids(struct dirtree *node)
   sprintf(toybuf, "/proc/%d/cmdline", pid);
   if (!(readfile(toybuf, toybuf, 256))) return 0;
 
-  sprintf(s, "%d/fd", pid);
-  if (-1==(dirfd = openat(dirtree_parentfd(node), s, O_RDONLY))) return 0;
-  if (!(dp = fdopendir(dirfd))) close(dirfd);
-  else while ((entry = readdir(dp))) {
-    s = toybuf+256;
-    if (!readlinkat0(dirfd, entry->d_name, s, sizeof(toybuf)-256)) continue;
-    // Can the "[0000]:" happen in a modern kernel?
-    if (strstart(&s, "socket:[") || strstart(&s, "[0000]:")) {
-      long long ll = atoll(s);
-
-      sprintf(s, "%d/%s", pid, getbasename(toybuf));
-      add_num_cache(&TT.inodes, ll, s, strlen(s)+1);
-    }
-  }
-  closedir(dp);
+  name = xmprintf("%d/%s", pid, getbasename(toybuf));
+  proc_fds(pid, add_inode, name);
+  free(name);
 
   return 0;
 }
@@ -357,16 +319,16 @@ void netstat_main(void)
     xputc('\n');
 
     if (FLAG(t)) {
-      show_ip("/proc/net/tcp");
-      show_ip("/proc/net/tcp6");
+      show_net("tcp", show_ip);
+      show_net("tcp6", show_ip);
     }
     if (FLAG(u)) {
-      show_ip("/proc/net/udp");
-      show_ip("/proc/net/udp6");
+      show_net("udp", show_ip);
+      show_net("udp6", show_ip);
     }
     if (FLAG(w)) {
-      show_ip("/proc/net/raw");
-      show_ip("/proc/net/raw6");
+      show_net("raw", show_ip);
+      show_net("raw6", show_ip);
     }
   }
 
@@ -374,7 +336,7 @@ void netstat_main(void)
     printf("Active UNIX domain sockets (%s)\n", type);
     printf("Proto RefCnt Flags       Type       State         I-Node%sPath\n",
            FLAG(p) ? "   PID/Program Name     " : "   ");
-    show_unix_sockets();
+    show_net("unix", show_unix);
   }
 
   if (FLAG(p) && CFG_TOYBOX_FREE) llist_traverse(TT.inodes, free);
