@@ -82,6 +82,17 @@ testing "-t -p" "P=\$BASHPID; [ \"\$(\"\$C\" -t -p \$P)\" = \$P ] && echo yes" \
 testing "-p list" "\"\$C\" -t -p \$BASHPID,\$PPID | wc -l" "2\n" "" ""
 testing "-p twice" "\"\$C\" -t -p \$BASHPID -p \$PPID | wc -l" "2\n" "" ""
 testcmd "-p no such process" "-p 999999999 | wc -l" "0\n" "" ""
+# 숫자가 아닌 값은 에러만 내고 조회하지 않는다 (예전엔 "1x" 를 PID 1 로 조회)
+testcmd "-p bad value" "-p 1x 2>&1; echo \$?" "lsof: bad -p '1x'\n1\n" "" ""
+testcmd "-p zero" "-p 0 2>&1; echo \$?" "lsof: bad -p '0'\n1\n" "" ""
+testing "-p bad value skipped" \
+  "P=\$BASHPID; \"\$C\" -t -p x,\$P 2>/dev/null | grep -cx \$P" "1\n" "" ""
+
+# -l: USER 칸에 이름 대신 uid 숫자
+testing "-l" "P=\$BASHPID; exec 3</dev/null; [ \"\$(\"\$C\" -l -p \$P | awk '\$4==\"3r\"{print \$3}')\" = \$(id -u) ] && echo yes" \
+  "yes\n" "" ""
+testing "USER without -l" "P=\$BASHPID; exec 3</dev/null; [ \"\$(fdline \$P 3r 3)\" = \"\$(id -un | cut -c1-10)\" ] && echo yes" \
+  "yes\n" "" ""
 
 # 권한 없는 프로세스는 NOFD 줄로 이유를 보여 준다 (root 는 다 읽을 수 있음)
 skipnot [ $(id -u) -ne 0 ]

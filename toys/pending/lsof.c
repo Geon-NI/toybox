@@ -48,6 +48,7 @@ struct file_info {
 static void print_info(void *data)
 {
   struct file_info *fi = data;
+  char *user;
 
   // Filter matches
   if (toys.optc) {
@@ -69,8 +70,11 @@ static void print_info(void *data)
       TT.shown_header = 1;
     }
 
+    // -l: numeric uid instead of user name
+    if (FLAG(l)) sprintf(user = toybuf, "%d", fi->pi.uid);
+    else user = getusername(fi->pi.uid);
     printf("%-9s %5d %10.10s %4s%c%c %7s %18s %9s %10s %s\n",
-           fi->pi.cmd, fi->pi.pid, getusername(fi->pi.uid),
+           fi->pi.cmd, fi->pi.pid, user,
            fi->fd, fi->rw, fi->locks, fi->type, fi->device, fi->size_off,
            fi->node, fi->name);
   }
@@ -328,9 +332,10 @@ void lsof_main(void)
     char *start, *end, *next = pp->arg;
 
     while ((start = comma_iterate(&next, &i))) {
-      if ((pid = strtol(start, &end, 10))<1 || (*end && *end!=','))
-        error_msg("bad -p '%.*s'", (int)(end-start), start);
-      lsof_pid(pid, 0);
+      // The whole entry must be a positive number ("12x" isn't PID 12)
+      if ((pid = strtol(start, &end, 10))<1 || end != start+i)
+        error_msg("bad -p '%.*s'", i, start);
+      else lsof_pid(pid, 0);
     }
   }
 
