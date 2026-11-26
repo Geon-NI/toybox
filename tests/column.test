@@ -1,0 +1,88 @@
+#!/bin/bash
+
+[ -f testing.sh ] && . testing.sh
+
+#testing "name" "command" "result" "infile" "stdin"
+
+# 기대값은 util-linux 2.39 column 의 출력과 비교해 확인한 것이다.
+# (다르게 동작하는 세 경우는 맨 아래 "util-linux 와 다른 점" 참고)
+S12="$(seq 1 12)\n"
+
+# 기본 모드: 줄 하나가 칸 하나, 세로로 먼저 채운다. 칸 너비 = 가장 긴 줄을
+# 다음 탭 위치(8의 배수)로 올림. -c 가 없으면 터미널 너비(없으면 COLUMNS, 80).
+testcmd "fill columns" "-c 30" "1\t5\t9\n2\t6\t10\n3\t7\t11\n4\t8\t12\n" \
+  "" "$S12"
+testcmd "-x fills rows" "-x -c 30" "1\t2\t3\n4\t5\t6\n7\t8\t9\n10\t11\t12\n" \
+  "" "$S12"
+testing "COLUMNS" "COLUMNS=30 \"\$C\"" "1\t5\t9\n2\t6\t10\n3\t7\t11\n4\t8\t12\n" \
+  "" "$S12"
+# 터미널 크기는 stdin/stdout/stderr 중 터미널인 것에서 읽으므로 셋 다 막는다
+testing "default width 80" "env -u COLUMNS \"\$C\" 2>/dev/null" \
+  "1\t3\t5\t7\t9\t11\n2\t4\t6\t8\t10\t12\n" "" "$S12"
+testcmd "last row short" "-c 16" "1\t4\n2\t5\n3\n" "" "1\n2\n3\n4\n5\n"
+testcmd "one per line if only one fits" "-c 15" "1\n2\n3\n" "" "1\n2\n3\n"
+testcmd "line wider than output" "-c 3" "abc\nd\n" "" "abc\nd\n"
+# 8글자 줄은 칸 너비 16: 다음 칸까지 탭 하나 (8 → 16)
+testcmd "width rounds to next tab stop" "-c 40" "abcdefgh\tb\n" "" \
+  "abcdefgh\nb\n"
+testcmd "several tabs to next column" "-c 80" "a b  c\t\tlonger x\tq\n" "" \
+  "a b  c\nlonger x\nq\n"
+# 너비는 바이트가 아니라 화면 칸: 日本語 는 9바이트지만 6칸 → 칸 너비 8
+testcmd "UTF-8 width" "-c 16" "日本語\tabcdefg\n" "" "日本語\nabcdefg\n"
+testcmd "empty lines skipped" "-c 30" "a\tb\n" "" "a\n\nb\n"
+testcmd "-L keeps empty lines" "-c 30 -L" "a\t\tb\n" "" "a\n\nb\n"
+testcmd "no input" "" "" "" ""
+testcmd "files" "input -" "x\ty\n" "x\n" "y\n"
+testcmd "missing file" "nosuch input 2>/dev/null; echo \$?" "x\n1\n" "x\n" ""
+
+# -t: 줄을 필드로 나눠 표로. 칸 사이는 공백 두 칸, 마지막 칸은 채우지 않는다.
+# 필드가 모자란 줄은 빈 칸으로 채운다.
+testcmd "-t" "-t" "a       b  c\nlonger  x  \nq          \n" "" \
+  "a b  c\nlonger x\n\nq\n"
+testcmd "-t -L" "-t -L" "a       b  c\n           \nlonger  x  \n" "" \
+  "a b c\n\nlonger x\n"
+testcmd "-t leading and trailing spaces" "-t" "a    b\nccc  dd\n" "" \
+  "  a  b  \nccc\tdd\n"
+testcmd "-t UTF-8 width" "-t" "héllo  wörld\n日本   x\n" "" \
+  "héllo wörld\n日本 x\n"
+# -s: 지정한 문자 하나하나가 구분자. 연속된 구분자 사이는 빈 필드.
+testcmd "-s" "-t -s :" "a       b\n     x  \nccc  d  \n" "" "a::b\n:x:\nccc:d\n"
+testcmd "-s several characters" "-t -s ':,'" "a  b  c\n" "" "a:b,c\n"
+testcmd "-s space keeps empty fields" "-t -s ' '" "a    b\n" "" "a  b\n"
+testcmd "-o" "-t -s : -o '|'" "a  | |b\n   |x|\nccc|d|\n" "" "a::b\n:x:\nccc:d\n"
+testcmd "-o empty" "-t -o ''" "a b\nccdd\n" "" "a b\ncc dd\n"
+# -N: 머리글 줄. 이름도 칸 너비에 들어가고, 빈 이름은 건너뛴다.
+testcmd "-N" "-t -N A,B" "A    B\na    bb\nccc  d\n" "" "a bb\nccc d\n"
+testcmd "-N wider than data" "-t -N LONGNAME,B" "LONGNAME  B\nx         y\nz         \n" \
+  "" "x y\nz\n"
+testcmd "-N fewer than fields" "-t -N X" "X  \na  b\n" "" "a b\n"
+testcmd "-N skips empty names" "-t -N A,,C" "A  C\na  b\n" "" "a b\n"
+testcmd "-N no input" "-t -N A,B" "" "" ""
+# -R: 오른쪽 정렬. 번호(1부터)나 -N 이름으로 지정.
+testcmd "-R" "-t -R 2" "a    bb\nccc   d\n" "" "a bb\nccc d\n"
+testcmd "-R several" "-t -R 1,2" "  a  bb\nccc   d\n" "" "a bb\nccc d\n"
+testcmd "-R name" "-t -N A,B -R B" "A     B\na    bb\nccc   d\n" "" "a bb\nccc d\n"
+testcmd "-R empty last field not padded" "-t -R 3" "a    bb  x\nccc  d   \n" "" \
+  "a bb x\nccc d\n"
+
+# 에러
+testcmd "-R no such column" "-t -R 3 2>/dev/null || echo err" "err\n" "" "a b\n"
+testcmd "-R bad name" "-t -N A,B -R C 2>/dev/null || echo err" "err\n" "" \
+  "a b\n"
+testcmd "-R 0" "-t -R 0 2>/dev/null || echo err" "err\n" "" "a b\n"
+testcmd "-N needs -t" "-N A 2>/dev/null || echo err" "err\n" "" "a\n"
+testcmd "-R needs -t" "-R 1 2>/dev/null || echo err" "err\n" "" "a\n"
+testcmd "bad -c" "-c x 2>/dev/null || echo err" "err\n" "" "a\n"
+
+# util-linux 와 다른 점 (일부러):
+# 1. -x 에서 한 칸도 WIDTH 에 안 들어가면 util-linux 는 WIDTH 를 넘겨 한 줄로
+#    찍는다. 여기서는 기본 모드처럼 한 줄에 하나씩.
+testcmd "-x one per line if none fit" "-x -c 4" "1\n2\n10\n" "" "1\n2\n10\n"
+# 2. 데이터가 없는(머리글만 있는) 오른쪽 정렬 칸을 util-linux 는 터미널 끝까지
+#    늘린다. 여기서는 머리글 너비만큼만.
+testcmd "-R header-only column" "-t -N A,B -R B" "A  B\nx  \n" "" "x\n"
+# 3. -R 0 은 에러 (위). util-linux 는 첫 칸으로 처리한다.
+
+# -N 이 전부 빈 이름이어도 머리글 줄(빈 칸들)은 찍는다 (util-linux 와 같음)
+testcmd "-N all empty" "-t -N ," "   \na  b\n" "" "a b\n"
+testcmd "-N first empty" "-t -N ,B,C" "B  C\na  b\n" "" "a b\n"
