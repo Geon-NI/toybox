@@ -5,7 +5,7 @@
 
 - 팀원: 김건우, 나주한
 - 저장소: https://github.com/Geon-NI/toybox (원본: https://github.com/landley/toybox)
-- 최종 갱신: 2026-11-19
+- 최종 갱신: 2026-11-26
 
 > 이 파일은 팀 포크 전용 문서입니다. 원본(upstream)에 PR 을 보낼 때는 포함하지 않습니다.
 
@@ -96,7 +96,7 @@ PR 설명에 `Closes #이슈번호` 를 적으면 merge 될 때 이슈가 자동
 | 담당 | 작업 | 예상 줄 수 (코드 + 테스트) |
 |---|---|---|
 | 김건우 | fdstat 영역 B + 확장, `/proc` 공용 lib, lsof 정리, `column`, vmstat·`/proc` 명령 테스트, `swapon -a` | 약 1,225 ~ 1,880 |
-| 나주한 | fdstat 영역 A, `sysctl --system`, `envsubst`, fuzzing 오버플로 수정, `ipcs`/`ipcrm` 정리, `ulimit` 테스트, `w` 테스트 | 약 810 ~ 1,350 (제안, 협의 필요) |
+| 나주한 | fdstat 영역 A, `sysctl --system`, `envsubst`, fuzzing 오버플로 수정, `ipcs`/`ipcrm` 정리, `ulimit` 테스트, `w` 테스트 | 약 810 ~ 1,350 |
 
 ---
 
@@ -159,7 +159,7 @@ PR 설명에 `Closes #이슈번호` 를 적으면 merge 될 때 이슈가 자동
 | ✅ | 구현 | `swapon -a`: `/etc/fstab` 의 swap 항목, `noauto`·`nofail`·`pri=`·`discard[=once\|pages]`, 이미 활성(`/proc/swaps`) 건너뛰기, `UUID=`/`LABEL=`. 둘 다 `-v`, 여러 FILE. `swapoff -a` 를 혼자 쓸 수 없던 버그(`<1>1`) 수정 |
 | ✅ | 테스트 | `tests/swapon.test` 10개, `tests/swapoff.test` 7개. 판단 로직은 가짜 fstab·/proc/swaps 로(namespace), 실제 켜고 끄기는 root 일 때만 |
 
-### 7.2 나주한 (제안, 협의 필요)
+### 7.2 나주한
 
 #### A1. fdstat 영역 A — 코드 100~150 / 테스트 40~70 · 이슈 [#2](https://github.com/Geon-NI/toybox/issues/2)
 | 상태 | 작업 | 내용 |
