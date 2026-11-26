@@ -1,0 +1,43 @@
+#!/bin/bash
+
+[ -f testing.sh ] && . testing.sh
+
+#testing "name" "command" "result" "infile" "stdin"
+
+# 지금 이 셸($BASHPID)의 메모리 맵과 비교한다. pmap 을 실행하는 동안 셸은
+# 기다리기만 하므로 맵이 바뀌지 않는다.
+# maps_kb PID: /proc/PID/maps 의 구간 크기 합 (KB)
+maps_kb() {
+  local a b t=0
+  while IFS='- ' read a b _; do t=$((t+(16#$b-16#$a)/1024)); done < /proc/$1/maps
+  echo $t
+}
+
+testing "first line is PID: command" \
+  "P=\$BASHPID; [ \"\$(\"\$C\" \$P | head -n 1)\" = \"\$P: \$(tr '\\0' '\\n' < /proc/\$P/cmdline | head -n 1)\" ] && echo yes" \
+  "yes\n" "" ""
+testing "one line per mapping" \
+  "P=\$BASHPID; [ \$(\"\$C\" -q \$P | wc -l) = \$((\$(wc -l < /proc/\$P/maps)+1)) ] && echo yes" \
+  "yes\n" "" ""
+testing "total" \
+  "P=\$BASHPID; [ \"\$(\"\$C\" \$P | tail -n 1 | tr -s ' ')\" = \"total \$(maps_kb \$P)K\" ] && echo yes" \
+  "yes\n" "" ""
+testing "line format" \
+  "P=\$BASHPID; \"\$C\" -q \$P | sed -n 2p | grep -cE '^[0-9a-f]{8,16} +[0-9]+K [r-][w-][x-][s-]- '" \
+  "1\n" "" ""
+testing "-q" "P=\$BASHPID; \"\$C\" -q \$P | grep -c total" "0\n" "" ""
+testing "basename without -p" \
+  "P=\$BASHPID; E=\$(readlink /proc/\$P/exe); \"\$C\" \$P | grep -q \" \${E##*/}\\\$\" && ! \"\$C\" \$P | grep -q \" \$E\\\$\" && echo yes" \
+  "yes\n" "" ""
+testing "-p full path" \
+  "P=\$BASHPID; E=\$(readlink /proc/\$P/exe); \"\$C\" -p \$P | grep -q \" \$E\\\$\" && echo yes" \
+  "yes\n" "" ""
+testing "-x header" "P=\$BASHPID; \"\$C\" -x \$P | sed -n 2p | tr -s ' '" \
+  "Address Kbytes PSS Dirty Swap Mode Mapping\n" "" ""
+testing "-x total" \
+  "P=\$BASHPID; \"\$C\" -x \$P | tail -n 1 | awk -v t=\$(maps_kb \$P) '{print \$1, \$2==t, NF}'" \
+  "total 1 5\n" "" ""
+testing "-x columns" "P=\$BASHPID; \"\$C\" -xq \$P | sed -n 2p | awk '{print NF>=6}'" \
+  "1\n" "" ""
+testcmd "no such process" "999999999 2>&1; echo \$?" \
+  "pmap: no /proc/999999999/cmdline\n1\n" "" ""

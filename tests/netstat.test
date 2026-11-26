@@ -1,0 +1,108 @@
+#!/bin/bash
+
+[ -f testing.sh ] && . testing.sh
+
+#testing "name" "command" "result" "infile" "stdin"
+
+# 머리글: 소켓과 관계없이 옵션마다 정해져 있다
+INET="Proto Recv-Q Send-Q Local Address           Foreign Address         State      "
+testcmd "-t header" "-tn | head -n 2" \
+  "Active Internet connections (w/o servers)\n$INET\n" "" ""
+testcmd "-l header" "-tln | head -n 1" \
+  "Active Internet connections (only servers)\n" "" ""
+testcmd "-a header" "-tan | head -n 1" \
+  "Active Internet connections (servers and established)\n" "" ""
+testcmd "-e header" "-ten | sed -n 2p" "$INET User       Inode      \n" "" ""
+testcmd "-p header" "-tnp | sed -n 2p" "$INET PID/Program Name\n" "" ""
+testcmd "-W header" "-tnW | sed -n 2p | tr -s ' '" \
+  "Proto Recv-Q Send-Q Local Address Foreign Address State \n" "" ""
+testcmd "-W widens columns" "-tnW | sed -n 2p | wc -c" "136\n" "" ""
+testcmd "-x header" "-x | head -n 2" \
+  "Active UNIX domain sockets (w/o servers)\nProto RefCnt Flags       Type       State         I-Node   Path\n" \
+  "" ""
+testcmd "default is -tuwx" "| grep -c '^Active'" "2\n" "" ""
+testcmd "-r" "-rn | head -n 2" \
+  "Kernel IP routing table\nDestination\tGateway \tGenmask \tFlags   MSS Window  irtt Iface\n" \
+  "" ""
+
+# 소켓 줄: python3 로 아래 소켓을 연 채 netstat 을 실행하고, 우리 소켓 줄만 골라
+# 실행마다 바뀌는 값을 이름으로 바꾼다. 줄 순서는 커널 해시 순서라서 정렬하고,
+# 칸 사이 공백은 하나로 줄인다.
+#   L  tcp listen 127.0.0.1     C  L 에 접속한 쪽 (100바이트 보냄, L 쪽은 안 읽음)
+#   U  udp bind 127.0.0.1       V  U 로 connect 한 udp
+#   PWD/sock  unix listen       L6 tcp6 listen ::1 (V6=1 일 때만)
+#   INO 소켓 inode, PID 이 python 의 PID
+net() {
+  python3 - "$C" "$@" << 'EOF'
+import os, socket, subprocess, sys
+l = socket.socket(); l.bind(('127.0.0.1', 0)); l.listen()
+c = socket.create_connection(l.getsockname()); a, _ = l.accept()
+c.send(b'x' * 100)
+u = socket.socket(type=socket.SOCK_DGRAM); u.bind(('127.0.0.1', 0))
+v = socket.socket(type=socket.SOCK_DGRAM); v.connect(u.getsockname())
+x = socket.socket(socket.AF_UNIX); x.bind(os.getcwd() + '/sock'); x.listen()
+socks = {'L': l, 'C': c, 'U': u, 'V': v}
+if os.environ.get('V6'):
+  socks['L6'] = socket.socket(socket.AF_INET6)
+  socks['L6'].bind(('::1', 0)); socks['L6'].listen()
+ports = {str(s.getsockname()[1]): n for n, s in socks.items()}
+inos = {str(os.fstat(s.fileno()).st_ino) for s in list(socks.values()) + [a, x]}
+out = subprocess.run(sys.argv[1:], capture_output=True, text=True).stdout
+lines = []
+for line in out.splitlines()[2:]:
+  mine, t = 0, line.split()
+  for i, w in enumerate(t):
+    host, _, port = w.rpartition(':')
+    if host and port in ports: t[i], mine = host + ':' + ports[port], 1
+    elif w in inos: t[i], mine = 'INO', 1
+    elif w == '%d/python3' % os.getpid(): t[i] = 'PID/python3'
+    elif w.startswith(os.getcwd() + '/'): t[i], mine = 'PWD' + w[len(os.getcwd()):], 1
+  if mine: lines.append(' '.join(t))
+if lines: print('\n'.join(sorted(lines)))
+os.unlink('sock')
+EOF
+}
+has_python() { python3 -c pass; }
+has_ipv6() { python3 -c 'import socket; socket.socket(socket.AF_INET6).bind(("::1", 0))'; }
+
+# 기본(-l/-a 없음): 연결된 소켓만. Recv-Q 는 L 쪽에 쌓인 100바이트
+skipnot has_python
+testing "tcp connections" "net -tn" \
+  "tcp 0 0 127.0.0.1:C 127.0.0.1:L ESTABLISHED\ntcp 100 0 127.0.0.1:L 127.0.0.1:C ESTABLISHED\n" \
+  "" ""
+# -l: listen 소켓만 (예전엔 원격 포트 비트(rport&0x70)로 걸러서, 연결이
+# 원격 포트 번호에 따라 -l 에 섞이거나 기본 출력에서 빠졌다)
+skipnot has_python
+testing "tcp -l" "net -tln" "tcp 0 0 127.0.0.1:L 0.0.0.0:* LISTEN\n" "" ""
+skipnot has_python
+testing "tcp -a" "net -tan" \
+  "tcp 0 0 127.0.0.1:C 127.0.0.1:L ESTABLISHED\ntcp 0 0 127.0.0.1:L 0.0.0.0:* LISTEN\ntcp 100 0 127.0.0.1:L 127.0.0.1:C ESTABLISHED\n" \
+  "" ""
+# udp: connect 하지 않은 소켓은 listen 처럼 취급 (State 칸 비어 있음)
+skipnot has_python
+testing "udp connected" "net -un" \
+  "udp 0 0 127.0.0.1:V 127.0.0.1:U ESTABLISHED\n" "" ""
+skipnot has_python
+testing "udp -l" "net -uln" "udp 0 0 127.0.0.1:U 0.0.0.0:*\n" "" ""
+skipnot has_ipv6
+testing "tcp6 -l" "V6=1 net -tln | grep tcp6" \
+  "tcp6 0 0 ::1:L6 [::]:* LISTEN\n" "" ""
+skipnot has_python
+testing "-e user and inode" "net -tlne" \
+  "tcp 0 0 127.0.0.1:L 0.0.0.0:* LISTEN $(id -u) INO\n" "" ""
+skipnot has_python
+testing "-p" "net -tlnp" \
+  "tcp 0 0 127.0.0.1:L 0.0.0.0:* LISTEN PID/python3\n" "" ""
+
+# unix: listen 소켓은 -l/-a 에서만
+skipnot has_python
+testing "unix -l" "net -xl" \
+  "unix 2 [ ACC ] STREAM LISTENING INO PWD/sock\n" "" ""
+skipnot has_python
+testing "unix listening hidden by default" "net -x | wc -l" "0\n" "" ""
+skipnot has_python
+testing "unix -a" "net -xa" \
+  "unix 2 [ ACC ] STREAM LISTENING INO PWD/sock\n" "" ""
+skipnot has_python
+testing "unix -p" "net -xlp" \
+  "unix 2 [ ACC ] STREAM LISTENING INO PID/python3 PWD/sock\n" "" ""

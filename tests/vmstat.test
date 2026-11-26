@@ -1,0 +1,81 @@
+#!/bin/bash
+
+[ -f testing.sh ] && . testing.sh
+
+#testing "name" "command" "result" "infile" "stdin"
+
+HDR1="procs ------------memory------------ ---swap-- -----io---- --system- ----cpu----"
+HDR2=" r  b    swpd    free   buff   cache   si   so    bi    bo   in   cs us sy id wa"
+
+# 실제 /proc 으로: 형식만 확인 (값은 기계마다 다름)
+testcmd "header" "| head -n 2" "$HDR1\n$HDR2\n" "" ""
+testcmd "one line without DELAY" "| wc -l" "3\n" "" ""
+testcmd "16 columns" "| awk 'NR==3{print NF}'" "16\n" "" ""
+testcmd "DELAY COUNT" "1 2 | wc -l" "4\n" "" ""
+testcmd "-n" "-n 1 2 | grep -c procs" "1\n" "" ""
+testcmd "bad DELAY" "x 2>/dev/null || echo err" "err\n" "" ""
+testcmd "zero COUNT" "1 0 2>/dev/null || echo err" "err\n" "" ""
+testcmd "too many args" "1 2 3 2>/dev/null || echo err" "err\n" "" ""
+
+# 가짜 /proc 으로: 값 계산 확인
+# mount namespace 안에서 /proc/{stat,meminfo,vmstat,uptime} 위에 테스트 파일을
+# bind mount 해서 입력을 고정한다. 일반 사용자는 user namespace(unshare -r) 가
+# 필요한데 막혀 있는 시스템이 있어서(Ubuntu 24.04 AppArmor 기본값), 그때는
+# 건너뛰고 root 로 돌 때(CI 의 ROOT_TESTS) 확인한다.
+[ $(id -u) -eq 0 ] && NS="unshare -m" || NS="unshare -rm"
+fakeproc() {
+  $NS sh -c 'for i in stat meminfo vmstat uptime; do
+    mount --bind fake.$i /proc/$i || exit 1; done; exec "$@"' sh "$C" "$@"
+}
+can_fake() { echo > fake.x && $NS sh -c 'mount --bind fake.x /proc/uptime'; }
+
+# 첫 줄 = 부팅 이후 평균. 나누는 시간은 /proc/uptime 의 두 번째 값(10초)
+# /proc/stat 의 cpu 줄: user nice system idle iowait irq softirq (jiffies)
+cat > fake.stat << EOF
+cpu  90 10 40 800 50 6 4 0 0 0
+intr 1000 1 2 3
+ctxt 2000
+procs_running 3
+procs_blocked 1
+EOF
+cat > fake.meminfo << EOF
+MemFree:          1000 kB
+Buffers:           200 kB
+Cached:            300 kB
+SwapCached:          0 kB
+SwapTotal:        1000 kB
+SwapFree:          400 kB
+SReclaimable:       50 kB
+EOF
+# pgpgin/pgpgout 은 KB 단위, pswpin/pswpout 은 페이지 단위 (커널 mm/vmstat.c)
+cat > fake.vmstat << EOF
+pgpgin 1000
+pgpgout 2000
+pswpin 10
+pswpout 20
+EOF
+echo "100.00 10.00" > fake.uptime
+PK=$(($(getconf PAGESIZE)/1024))
+
+# r = procs_running - 1 (vmstat 자신 제외), swpd = SwapTotal - SwapFree,
+# cache = Cached + SReclaimable, us = user+nice, sy = system+irq+softirq
+skipnot can_fake
+testing "procs and memory" "fakeproc | awk 'NR==3{print \$1,\$2,\$3,\$4,\$5,\$6}'" \
+  "2 1 600 1000 200 350\n" "" ""
+# bi/bo: KB 그대로 / 10초. (예전엔 페이지 크기를 곱해 4배로 나왔음)
+skipnot can_fake
+testing "bi bo are KB per second" "fakeproc | awk 'NR==3{print \$9,\$10}'" \
+  "100 200\n" "" ""
+# si/so: 페이지 × 페이지 크기(KB) / 10초. (예전엔 페이지 크기를 두 번 곱했음)
+skipnot can_fake
+testing "si so are KB per second" "fakeproc | awk 'NR==3{print \$7,\$8}'" \
+  "$PK $((PK*2))\n" "" ""
+skipnot can_fake
+testing "interrupts and context switches" \
+  "fakeproc | awk 'NR==3{print \$11,\$12}'" "100 200\n" "" ""
+# cpu 합계 1000 jiffies: us 100 sy 50 id 800 wa 50
+skipnot can_fake
+testing "cpu percent" "fakeproc | awk 'NR==3{print \$13,\$14,\$15,\$16}'" \
+  "10 5 80 5\n" "" ""
+
+rm -f fake.*

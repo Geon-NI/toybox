@@ -17,9 +17,10 @@ config VMSTAT
     (With no DELAY, prints one line. With no COUNT, repeats until killed.)
 
     Show processes running and blocked, kilobytes swapped, free, buffered, and
-    cached, kilobytes swapped in and out per second, file disk blocks input and
-    output per second, interrupts and context switches per second, percent
-    of CPU time spent running user code, system code, idle, and awaiting I/O.
+    cached, kilobytes swapped in and out per second, kilobytes read from and
+    written to block devices per second, interrupts and context switches per
+    second, percent of CPU time spent running user code, system code, idle,
+    and awaiting I/O.
     First line is since system started, later lines are since last line.
 
     -n	Display the header only once
@@ -138,8 +139,9 @@ void vmstat_main(void)
       if (i>5) out -= oldptr[order[i]];
       if (order[i]<7) out = ((out*100) + (total_hz/2)) / total_hz;
       else if (order[i]>16) {
+        // pgpgin/pgpgout are already kilobytes, pswpin/pswpout are pages
         if (order[i]>18) out *= page_kb;
-        out = (out*page_kb+(units-1))/units;
+        out = (out+(units-1))/units;
       } else if (order[i]<9) out = (out+(units-1)) / units;
 
       // If a field was too big to fit in its slot, try to compensate later

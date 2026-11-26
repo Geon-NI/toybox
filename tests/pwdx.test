@@ -1,0 +1,25 @@
+#!/bin/bash
+
+[ -f testing.sh ] && . testing.sh
+
+#testing "name" "command" "result" "infile" "stdin"
+
+# $BASHPID = 테스트 명령을 실행하는 지금 이 셸 (B1 fdstat 테스트 주석 참고)
+testing "current shell" "P=\$BASHPID; [ \"\$(\"\$C\" \$P)\" = \"\$P: \$PWD\" ] && echo yes" \
+  "yes\n" "" ""
+testing "after cd" "cd /; P=\$BASHPID; \"\$C\" \$P | sed \"s/^\$P:/P:/\"" \
+  "P: /\n" "" ""
+testing "several PIDs" "P=\$BASHPID; \"\$C\" \$P \$P | wc -l" "2\n" "" ""
+testing "deleted directory" \
+  "mkdir gone && cd gone && rmdir ../gone && P=\$BASHPID && \"\$C\" \$P | sed \"s@^\$P: \$OLDPWD/@@\"" \
+  "gone (deleted)\n" "" ""
+testcmd "no such process" "999999999; echo \$?" \
+  "999999999: No such file or directory\n1\n" "" ""
+# 숫자가 아닌 인자는 조회하지 않는다 (예전엔 atoi 로 "1x" 를 PID 1 로 읽었다)
+testcmd "bad PID" "1x abc; echo \$?" \
+  "1x: No such process\nabc: No such process\n1\n" "" ""
+testing "bad PID still shows others" \
+  "P=\$BASHPID; \"\$C\" x \$P 2>/dev/null | grep -c \"^\$P: \"" "1\n" "" ""
+testcmd "no arguments" "2>/dev/null || echo err" "err\n" "" ""
+skipnot [ $(id -u) -ne 0 ]  # root 는 다 읽을 수 있음
+testcmd "unreadable process" "1; echo \$?" "1: Permission denied\n1\n" "" ""

@@ -135,10 +135,11 @@ static void show_ip(struct proc_sock *ps, void *unused)
                          "FIN_WAIT2", "TIME_WAIT", "CLOSE", "CLOSE_WAIT",
                          "LAST_ACK", "LISTEN", "CLOSING", "UNKNOWN"};
   unsigned state = ps->state;
+  // No remote end and LISTEN (tcp) or CLOSE (unconnected udp/raw)
+  int listen = !ps->rport && (state&0xA);
 
-  // Should we display this? (listening or all or TCP/UDP/RAW)
-  if (!(FLAG(l) && (!ps->rport && (state&0xA))) && !FLAG(a)
-      && !(ps->rport&0x70)) return;
+  // Servers only with -l, connections only without it, -a shows both
+  if (!FLAG(a) && listen != !!FLAG(l)) return;
 
   addr2str(ps->af, ps->laddr, ps->lport, lip, TT.wpad, label);
   addr2str(ps->af, ps->raddr, ps->rport, rip, TT.wpad, label);

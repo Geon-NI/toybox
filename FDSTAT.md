@@ -149,8 +149,9 @@ PR 설명에 `Closes #이슈번호` 를 적으면 merge 될 때 이슈가 자동
 #### B6. `/proc` 명령 버그 수정·테스트 — 코드 5~15 / 테스트 120~190 · 이슈 [#14](https://github.com/Geon-NI/toybox/issues/14)
 | 상태 | 작업 | 내용 |
 |---|---|---|
-| ⬜ | `vmstat` bi/bo ([#525](https://github.com/landley/toybox/issues/525)) | `pgpgin`/`pgpgout` 은 KB 단위인데 페이지 크기를 곱하는 버그 수정 + 테스트 신규 |
-| ⬜ | 테스트 신규 | `netstat`, `pwdx`, `free`, `pmap` (현재 모두 테스트 없음) |
+| ✅ | `vmstat` bi/bo ([#525](https://github.com/landley/toybox/issues/525)) | bi/bo 와 si/so 가 페이지 크기만큼(×4) 커지던 버그 수정. `tests/vmstat.test` 13개 (가짜 `/proc` 을 bind mount 해 값까지 확인) |
+| ✅ | `netstat` | `-l` 에 연결이 섞이고 기본 출력에서 연결이 빠지던 버그(원격 포트 비트로 거름) 수정. `tests/netstat.test` 22개 |
+| ✅ | `pwdx`, `free`, `pmap` | pwdx 가 `1x` 를 PID 1 로 조회하던 버그, free 도움말(`-t` → `-h`) 수정. 테스트 9 / 12 / 11개 |
 
 #### B7. `swapon -a` / `swapoff -a` ([#594](https://github.com/landley/toybox/issues/594)) — 코드 60~100 / 테스트 20~40 · 이슈 [#15](https://github.com/Geon-NI/toybox/issues/15)
 | 상태 | 작업 | 내용 |

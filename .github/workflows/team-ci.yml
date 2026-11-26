@@ -12,8 +12,8 @@ env:
   # 팀에서 작업하는 명령. 새 작업을 시작하면 여기에 추가한다.
   # tests/NAME.test 가 아직 없는 명령은 건너뛴다.
   TEAM_TESTS: fdstat column lsof netstat vmstat pwdx free pmap sysctl envsubst ipcs w ulimit
-  # root 권한이 필요한 테스트 (sudo 로 실행)
-  ROOT_TESTS: swapon
+  # root 권한이 필요한 테스트 (sudo 로 실행). vmstat 은 가짜 /proc 을 bind mount 하는 테스트용
+  ROOT_TESTS: swapon vmstat
 
 jobs:
   build-test:
