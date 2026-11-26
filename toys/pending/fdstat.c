@@ -3,7 +3,7 @@
  * Copyright 2026 Kim Geonwoo, Na Juhan
  *
  * No standard. Reads /proc/sys/fs/file-nr, /proc/$PID/fd, /proc/$PID/limits
- * and /proc/net/{tcp,tcp6,udp,udp6,unix,netlink}.
+ * and the /proc/net socket tables (via lib/proc.c).
 
 USE_FDSTAT(NEWTOY(fdstat, "LtlUu:c:w#<1>100d#<1n#<1[!nU]", TOYFLAG_USR|TOYFLAG_BIN))
 
@@ -44,11 +44,6 @@ GLOBALS(
   // 여기부터는 옵션과 무관한 내부 상태
   int hdr;        // 프로세스 표 머리글을 이미 출력했으면 1
   long uid;       // -u USER 를 main 에서 한 번 uid 로 바꿔 둔 값
-
-  // 소켓 inode 캐시 (sock_type): 원소 = (inode << 4) | 종류, inode 순 정렬
-  // -d 반복에서는 매 회차 sockread = 0 으로 되돌려 다시 읽게 해야 한다.
-  long long *socks;
-  int nsock, sockread;
 )
 
 /* ------------------------------------------------------------------ *
@@ -253,55 +248,19 @@ static int cmp_ll(const void *a, const void *b)
   return (x > y) - (x < y);
 }
 
-// /proc/net 의 소켓 테이블을 읽어 TT.socks 에 (inode << 4) | 종류 로 모은다.
-// inode 위치: unix 는 7번째 칸, tcp/udp/netlink 는 10번째 칸. 첫 줄은 머리글.
-// bind 하지 않은 netlink 소켓은 커널이 목록에 넣지 않아 "socket" 으로 분류된다.
-static void load_socks(void)
-{
-  struct { char *name; int type; } tab[] = {{"tcp", FD_TCP}, {"tcp6", FD_TCP},
-    {"udp", FD_UDP}, {"udp6", FD_UDP}, {"unix", FD_UNIX},
-    {"netlink", FD_NETLINK}};
-  char buf[32], *line, *s;
-  long long ino;
-  FILE *fp;
-  int i, col;
-
-  TT.nsock = 0;
-  for (i = 0; i < ARRAY_LEN(tab); i++) {
-    sprintf(buf, "/proc/net/%s", tab[i].name);
-    if (!(fp = fopen(buf, "r"))) continue;   // IPv6 꺼진 시스템 등은 건너뜀
-    free(xgetline(fp));
-    while ((line = xgetline(fp))) {
-      for (s = line, col = 1; col < (tab[i].type == FD_UNIX ? 7 : 10); col++) {
-        s += strspn(s, " ");    // 칸 앞 공백 건너뛰기
-        s += strcspn(s, " ");   // 칸 내용 건너뛰기
-      }
-      if ((ino = atoll(s)) > 0) {
-        if (!(TT.nsock & 255))
-          TT.socks = xrealloc(TT.socks, (TT.nsock+256)*sizeof(long long));
-        TT.socks[TT.nsock++] = (ino << 4) | tab[i].type;
-      }
-      free(line);
-    }
-    fclose(fp);
-  }
-  qsort(TT.socks, TT.nsock, sizeof(long long), cmp_ll);
-  TT.sockread = 1;
-}
-
-// 소켓 inode 가 /proc/net/{tcp,tcp6,udp,udp6,unix,netlink} 중 어디 있는지 확인
-// 테이블은 처음 한 번만 읽고 (load_socks) 이후엔 이진 탐색.
+// 소켓 inode 로 tcp/udp/unix/netlink 판정 (lib/proc.c 의 proc_sock 캐시 사용)
+// raw 소켓과, bind 하지 않아 커널 목록에 없는 netlink 소켓은 "socket" 이 된다.
 static int sock_type(long long inode)
 {
-  int lo = 0, hi, mid;
+  struct proc_sock *ps = proc_sock(inode);
 
-  if (!TT.sockread) load_socks();
-  for (hi = TT.nsock; lo < hi;)
-    if ((TT.socks[mid = (lo+hi)/2] >> 4) < inode) lo = mid+1;
-    else hi = mid;
+  if (!ps) return FD_SOCK;
+  if (ps->af == AF_UNIX) return FD_UNIX;
+  if (ps->af == AF_NETLINK) return FD_NETLINK;
+  if (ps->type == SOCK_STREAM) return FD_TCP;
+  if (ps->type == SOCK_DGRAM) return FD_UDP;
 
-  return (lo < TT.nsock && (TT.socks[lo] >> 4) == inode)
-    ? TT.socks[lo] & 15 : FD_SOCK;
+  return FD_SOCK;
 }
 
 // readlink(/proc/PID/fd/N) 결과로 FD 종류를 판정
@@ -326,64 +285,40 @@ static int fd_type(char *link)
   return FD_FILE;
 }
 
-// /proc/PID/fd 를 순회해 FD 개수를 세고, types 가 있으면 종류별로 누적.
-// 열 수 없으면 (없는 PID, 권한 없음) errno 를 남기고 -1 을 반환한다.
-// show_pid 와 show_top 이 함께 쓴다.
-static long count_fds(char *pid, long *types)
+// proc_fds 콜백: FD 하나의 종류를 types 에 누적
+// 목록은 보여도 링크는 못 읽게 막힌 프로세스가 있다 (예: systemd --user)
+static void add_type(int dirfd, char *fd, void *types)
 {
-  char buf[64];
-  struct dirent *de;
-  DIR *dir;
-  long count = 0;
-
-  sprintf(buf, "/proc/%s/fd", pid);
-  if (!(dir = opendir(buf))) return -1;
-  while ((de = readdir(dir))) {
-    if (*de->d_name == '.') continue;
-    count++;
-    if (types) {
-      // 목록은 보여도 링크는 못 읽게 막힌 프로세스가 있다 (예: systemd --user)
-      types[readlinkat0(dirfd(dir), de->d_name, toybuf, sizeof(toybuf))
-        ? fd_type(toybuf) : FD_UNKNOWN]++;
-    }
-  }
-  closedir(dir);
-
-  return count;
+  ((long *)types)[readlinkat0(dirfd, fd, toybuf, sizeof(toybuf))
+    ? fd_type(toybuf) : FD_UNKNOWN]++;
 }
 
-// -l: PID 의 FD 를 번호 순으로 하나씩 출력 (번호, fd_type 결과, readlink 대상)
+// /proc/PID/fd 의 FD 개수를 세고, types 가 있으면 종류별로 누적.
+// 열 수 없으면 (없는 PID, 권한 없음) errno 를 남기고 -1 을 반환한다.
+// show_pid, show_top, show_users 가 함께 쓴다.
+static long count_fds(char *pid, long *types)
+{
+  return proc_fds(atol(pid), types ? add_type : 0, types);
+}
+
+// proc_fds 콜백: FD 한 줄 출력 (번호, fd_type 결과, readlink 대상)
+// 링크를 못 읽으면 종류 unknown, 대상 "?"
+static void print_fd(int dirfd, char *fd, void *unused)
+{
+  if (readlinkat0(dirfd, fd, toybuf, sizeof(toybuf)))
+    printf("%10s  %-9s %s\n", fd, type_names[fd_type(toybuf)], toybuf);
+  else printf("%10s  %-9s ?\n", fd, type_names[FD_UNKNOWN]);
+}
+
+// -l: PID 의 FD 를 번호 순으로 하나씩 출력 (proc_fds 가 번호 순서를 보장)
 //           FD  TYPE      TARGET
 //            0  dev       /dev/pts/0
 //            3  tcp       socket:[12345]
-// readdir 순서는 보장되지 않으므로 번호를 모아 정렬한다.
-// 링크를 못 읽으면 종류 unknown, 대상 "?". 그 사이 프로세스가 끝났으면 조용히 끝낸다.
+// 그 사이 프로세스가 끝났으면 머리글만 남고 조용히 끝난다.
 static void list_fds(char *pid)
 {
-  char buf[64];
-  struct dirent *de;
-  long long *fds = 0;
-  int n = 0, i;
-  DIR *dir;
-
-  sprintf(buf, "/proc/%s/fd", pid);
-  if (!(dir = opendir(buf))) return;
-  while ((de = readdir(dir))) {
-    if (!isdigit(*de->d_name)) continue;
-    if (!(n & 255)) fds = xrealloc(fds, (n+256)*sizeof(long long));
-    fds[n++] = atoll(de->d_name);
-  }
-  qsort(fds, n, sizeof(long long), cmp_ll);
-
   printf("%10s  %-9s %s\n", "FD", "TYPE", "TARGET");
-  for (i = 0; i < n; i++) {
-    sprintf(buf, "%lld", fds[i]);
-    if (readlinkat0(dirfd(dir), buf, toybuf, sizeof(toybuf)))
-      printf("%10s  %-9s %s\n", buf, type_names[fd_type(toybuf)], toybuf);
-    else printf("%10s  %-9s ?\n", buf, type_names[FD_UNKNOWN]);
-  }
-  closedir(dir);
-  free(fds);
+  proc_fds(atol(pid), print_fd, 0);
 }
 
 // -t 분류 줄: 0 이 아닌 종류만 "이름 개수" 로 한 줄에 (print_row, show_users 공용)
@@ -595,7 +530,7 @@ void fdstat_main(void)
     if (FLAG(d)) {
       printf("\n--- FD snapshot ---\n");
       TT.hdr = 0;
-      TT.sockread = 0;    // 소켓은 회차마다 바뀌므로 /proc/net 을 다시 읽게 한다
+      proc_sock_free();   // 소켓은 회차마다 바뀌므로 /proc/net 을 다시 읽게 한다
     }
 
     if (FLAG(n)) show_top();

@@ -25,7 +25,7 @@ GLOBALS(
   struct arg_list *p;
 
   struct stat *sought_files;
-  struct double_list *all_sockets, *files;
+  struct double_list *files;
   int last_shown_pid, shown_header;
 )
 
@@ -102,142 +102,44 @@ static void fill_flags(struct file_info *fi)
   fclose(fp);
 }
 
-static void scan_proc_net_file(char *path, int family, char type,
-    void (*fn)(char *, int, char))
+// Fill TYPE and NAME of a socket from the /proc/net tables (lib/proc.c).
+// Sockets not in any table keep TYPE "sock" and NAME from readlink.
+static void find_socket(struct file_info *fi, long long inode)
 {
-  FILE *fp = fopen(path, "r");
-  char *line = NULL;
-  size_t line_length = 0;
-
-  if (!fp) return;
-
-  if (getline(&line, &line_length, fp) <= 0) return; // Skip header.
-
-  while (getline(&line, &line_length, fp) > 0) {
-    fn(line, family, type);
-  }
-
-  free(line);
-  fclose(fp);
-}
-
-static struct file_info *add_socket(ino_t inode, const char *type)
-{
-  struct file_info *fi = xzalloc(sizeof(struct file_info));
-
-  dlist_add_nomalloc(&TT.all_sockets, (struct double_list *)fi);
-  fi->di.ino = inode;
-  strcpy(fi->type, type);
-  return fi;
-}
-
-static void scan_unix(char *line, int af, char type)
-{
-  long inode;
-  int path_pos;
-
-  if (sscanf(line, "%*p: %*X %*X %*X %*X %*X %lu %n", &inode, &path_pos) >= 1) {
-    struct file_info *fi = add_socket(inode, "unix");
-    char *name = chomp(line + path_pos);
-
-    fi->name = strdup(*name ? name : "socket");
-  }
-}
-
-static void scan_netlink(char *line, int af, char type)
-{
-  unsigned state;
-  long inode;
+  char *tcp_states[] = {
+    "UNKNOWN", "ESTABLISHED", "SYN_SENT", "SYN_RECV", "FIN_WAIT1", "FIN_WAIT2",
+    "TIME_WAIT", "CLOSE", "CLOSE_WAIT", "LAST_ACK", "LISTEN", "CLOSING"
+  };
   char *netlink_states[] = {
     "ROUTE", "UNUSED", "USERSOCK", "FIREWALL", "SOCK_DIAG", "NFLOG", "XFRM",
     "SELINUX", "ISCSI", "AUDIT", "FIB_LOOKUP", "CONNECTOR", "NETFILTER",
     "IP6_FW", "DNRTMSG", "KOBJECT_UEVENT", "GENERIC", "DM", "SCSITRANSPORT",
     "ENCRYPTFS", "RDMA", "CRYPTO"
   };
+  char lip[INET6_ADDRSTRLEN], rip[INET6_ADDRSTRLEN];
+  struct proc_sock *ps = proc_sock(inode);
+  int v6;
 
-  if (sscanf(line, "%*p %u %*u %*x %*u %*u %*u %*u %*u %lu", &state, &inode)<2)
-    return;
-
-  struct file_info *fi = add_socket(inode, "netlink");
-  fi->name =
-      strdup(state < ARRAY_LEN(netlink_states) ? netlink_states[state] : "?");
-}
-
-static void scan_ip(char *line, int af, char type)
-{
-  char *tcp_states[] = {
-    "UNKNOWN", "ESTABLISHED", "SYN_SENT", "SYN_RECV", "FIN_WAIT1", "FIN_WAIT2",
-    "TIME_WAIT", "CLOSE", "CLOSE_WAIT", "LAST_ACK", "LISTEN", "CLOSING"
-  };
-  char local_ip[INET6_ADDRSTRLEN] = {0};
-  char remote_ip[INET6_ADDRSTRLEN] = {0};
-  struct in6_addr local, remote;
-  int local_port, remote_port, state;
-  long inode;
-  int ok;
-
-  if (af == 4) {
-    ok = sscanf(line, " %*d: %x:%x %x:%x %x %*x:%*x %*X:%*X %*X %*d %*d %ld",
-                &(local.s6_addr32[0]), &local_port,
-                &(remote.s6_addr32[0]), &remote_port,
-                &state, &inode) == 6;
+  if (!ps) return;
+  if (ps->af == AF_UNIX) {
+    strcpy(fi->type, "unix");
+    fi->name = xstrdup(ps->path ? : "socket");
+  } else if (ps->af == AF_NETLINK) {
+    strcpy(fi->type, "netlink");
+    fi->name = xstrdup((unsigned)ps->protocol < ARRAY_LEN(netlink_states)
+      ? netlink_states[ps->protocol] : "?");
   } else {
-    ok = sscanf(line, " %*d: %8x%8x%8x%8x:%x %8x%8x%8x%8x:%x %x "
-                "%*x:%*x %*X:%*X %*X %*d %*d %ld",
-                &(local.s6_addr32[0]), &(local.s6_addr32[1]),
-                &(local.s6_addr32[2]), &(local.s6_addr32[3]),
-                &local_port,
-                &(remote.s6_addr32[0]), &(remote.s6_addr32[1]),
-                &(remote.s6_addr32[2]), &(remote.s6_addr32[3]),
-                &remote_port, &state, &inode) == 12;
+    v6 = ps->af == AF_INET6;
+    strcpy(fi->type, v6 ? "IPv6" : "IPv4");
+    inet_ntop(ps->af, ps->laddr, lip, sizeof(lip));
+    inet_ntop(ps->af, ps->raddr, rip, sizeof(rip));
+    if (ps->type == SOCK_STREAM)
+      fi->name = xmprintf(v6 ? "TCP [%s]:%u->[%s]:%u (%s)"
+        : "TCP %s:%u->%s:%u (%s)", lip, ps->lport, rip, ps->rport,
+        tcp_states[ps->state > TCP_CLOSING ? 0 : ps->state]);
+    else fi->name = xmprintf(v6 ? "%s [%s]:%u->[%s]:%u" : "%s %s:%u->%s:%u",
+      ps->type == SOCK_DGRAM ? "UDP" : "RAW", lip, ps->lport, rip, ps->rport);
   }
-  if (!ok) return;
-
-  struct file_info *fi = add_socket(inode, af == 4 ? "IPv4" : "IPv6");
-  inet_ntop(af, &local, local_ip, sizeof(local_ip));
-  inet_ntop(af, &remote, remote_ip, sizeof(remote_ip));
-  if (type == 't') {
-    if (state < 0 || state > TCP_CLOSING) state = 0;
-    fi->name = xmprintf(af == 4 ?
-                        "TCP %s:%d->%s:%d (%s)" :
-                        "TCP [%s]:%d->[%s]:%d (%s)",
-                        local_ip, local_port, remote_ip, remote_port,
-                        tcp_states[state]);
-  } else {
-    fi->name = xmprintf(af == 4 ? "%s %s:%d->%s:%d" : "%s [%s]:%d->[%s]:%d",
-                        type == 'u' ? "UDP" : "RAW",
-                        local_ip, local_port, remote_ip, remote_port);
-  }
-}
-
-static int find_socket(struct file_info *fi, long inode)
-{
-  static int cached;
-  if (!cached) {
-    scan_proc_net_file("/proc/net/tcp", 4, 't', scan_ip);
-    scan_proc_net_file("/proc/net/tcp6", 6, 't', scan_ip);
-    scan_proc_net_file("/proc/net/udp", 4, 'u', scan_ip);
-    scan_proc_net_file("/proc/net/udp6", 6, 'u', scan_ip);
-    scan_proc_net_file("/proc/net/raw", 4, 'r', scan_ip);
-    scan_proc_net_file("/proc/net/raw6", 6, 'r', scan_ip);
-    scan_proc_net_file("/proc/net/unix", 0, 0, scan_unix);
-    scan_proc_net_file("/proc/net/netlink", 0, 0, scan_netlink);
-    cached = 1;
-  }
-  void* list = TT.all_sockets;
-
-  while (list) {
-    struct file_info *s = (struct file_info *)llist_pop(&list);
-
-    if (s->di.ino == inode) {
-      fi->name = s->name ? strdup(s->name) : NULL;
-      strcpy(fi->type, s->type);
-      return 1;
-    }
-    if (list == TT.all_sockets) break;
-  }
-
-  return 0;
 }
 
 static void fill_stat(struct file_info *fi, const char *path)
@@ -354,25 +256,20 @@ static void visit_maps(struct proc_info *pi)
   fclose(fp);
 }
 
+static void visit_fd(int dirfd, char *fd, void *pi)
+{
+  visit_symlink(pi, NULL, fd);
+}
+
 static void visit_fds(struct proc_info *pi)
 {
-  DIR *dir;
-  struct dirent *de;
+  struct file_info *fi;
+  int err;
 
-  snprintf(toybuf, sizeof(toybuf), "/proc/%d/fd", pi->pid);
-  if (!(dir = opendir(toybuf))) {
-    struct file_info *fi = new_file_info(pi, "NOFD");
-
-    fi->name = xmprintf("%s (opendir: %s)", toybuf, strerror(errno));
-    return;
-  }
-
-  while ((de = readdir(dir))) {
-    if (*de->d_name == '.') continue;
-    visit_symlink(pi, NULL, de->d_name);
-  }
-
-  closedir(dir);
+  if (proc_fds(pi->pid, visit_fd, pi) >= 0) return;
+  err = errno;
+  fi = new_file_info(pi, "NOFD");
+  fi->name = xmprintf("/proc/%d/fd (opendir: %s)", pi->pid, strerror(err));
 }
 
 static void lsof_pid(int pid, struct stat *st)
@@ -441,6 +338,6 @@ void lsof_main(void)
 
   if (CFG_TOYBOX_FREE) {
     llist_traverse(TT.files, free_info);
-    llist_traverse(TT.all_sockets, free_info);
+    proc_sock_free();
   }
 }
