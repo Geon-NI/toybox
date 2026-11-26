@@ -156,8 +156,8 @@ PR 설명에 `Closes #이슈번호` 를 적으면 merge 될 때 이슈가 자동
 #### B7. `swapon -a` / `swapoff -a` ([#594](https://github.com/landley/toybox/issues/594)) — 코드 60~100 / 테스트 20~40 · 이슈 [#15](https://github.com/Geon-NI/toybox/issues/15)
 | 상태 | 작업 | 내용 |
 |---|---|---|
-| ⬜ | 구현 | `/etc/fstab` 의 swap 항목 처리, `noauto`·이미 활성(`/proc/swaps`) 건너뛰기, `pri=` 지원 |
-| ⬜ | 테스트 | root 필요 → root 가 아니면 건너뛰도록 작성 |
+| ✅ | 구현 | `swapon -a`: `/etc/fstab` 의 swap 항목, `noauto`·`nofail`·`pri=`·`discard[=once\|pages]`, 이미 활성(`/proc/swaps`) 건너뛰기, `UUID=`/`LABEL=`. 둘 다 `-v`, 여러 FILE. `swapoff -a` 를 혼자 쓸 수 없던 버그(`<1>1`) 수정 |
+| ✅ | 테스트 | `tests/swapon.test` 10개, `tests/swapoff.test` 7개. 판단 로직은 가짜 fstab·/proc/swaps 로(namespace), 실제 켜고 끄기는 root 일 때만 |
 
 ### 7.2 나주한 (제안, 협의 필요)
 

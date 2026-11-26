@@ -1,0 +1,49 @@
+#!/bin/bash
+
+[ -f testing.sh ] && . testing.sh
+
+#testing "name" "command" "result" "infile" "stdin"
+
+# swapoff 도 root 전용. 방법은 tests/swapon.test 주석 참고.
+# -a 는 /proc/swaps 의 모든 항목을 끄므로, 테스트에서는 항상 가짜 /proc/swaps
+# 를 끼워 넣어 우리 파일만 들어 있게 한다 (CI 러너의 진짜 swap 을 끄지 않도록).
+[ $(id -u) -eq 0 ] && NS="unshare -m" || NS="unshare -rm"
+can_ns() { echo > ns.x && $NS sh -c 'mount --bind ns.x /proc/swaps'; }
+fake() {
+  $NS sh -c 'mount --bind swaps /proc/swaps || exit 1; exec "$@"' sh "$C" "$@"
+}
+
+# 커널 형식: 파일 이름 뒤는 공백으로 채우고(%-40s, 최소 한 칸), 나머지는 탭
+printf 'Filename\t\t\t\tType\t\tSize\tUsed\tPriority\n%s/a file\t4\t0\t-2\n%s/b\\040c file\t4\t0\t-3\n' \
+  "$PWD" "$PWD" > swaps
+
+# 머리글 줄은 건너뛰고, \040 은 공백으로
+skipnot can_ns
+testing "-a" "fake -av 2>/dev/null | sed \"s@\$PWD@PWD@\"" \
+  "swapoff PWD/a\nswapoff PWD/b c\n" "" ""
+skipnot can_ns
+testing "-a and FILE" "fake -av x 2>/dev/null | tail -n 1" "swapoff x\n" "" ""
+# 예전엔 옵션 문자열이 "<1>1" 이라 "swapoff -a" 혼자서는 쓸 수 없었다
+skipnot can_ns
+testing "-a alone" "fake -a 2>&1 | grep -c 'Need'" "0\n" "" ""
+skipnot can_ns
+testing "needs FILE or -a" "$NS \"\$C\" 2>/dev/null; echo \$?" "1\n" "" ""
+skipnot can_ns
+testing "error names the file" "fake nosuch 2>&1 | grep -c \"'nosuch'\"" \
+  "1\n" "" ""
+
+# 실제 swap 파일 (root 만)
+prio() { awk -v f="$PWD/$1" '$1==f{print $5}' /proc/swaps; }
+can_swap() {
+  [ $(id -u) -eq 0 ] && dd if=/dev/zero of=sw bs=1024 count=1024 2>/dev/null &&
+    chmod 600 sw && mkswap sw >/dev/null 2>&1 && swapon sw && "$C" sw
+}
+skipnot can_swap
+testing "FILE" "swapon sw; \"\$C\" sw; [ -z \"\$(prio sw)\" ] && echo off" \
+  "off\n" "" ""
+skipnot can_swap
+testing "-a" \
+  "swapon sw; printf 'Filename\tType\tSize\tUsed\tPriority\n%s/sw file\t1020\t0\t-2\n' \"\$PWD\" > swaps; fake -a; [ -z \"\$(prio sw)\" ] && echo off" \
+  "off\n" "" ""
+
+rm -f swaps sw ns.x

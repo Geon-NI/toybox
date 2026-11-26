@@ -1,0 +1,89 @@
+#!/bin/bash
+
+[ -f testing.sh ] && . testing.sh
+
+#testing "name" "command" "result" "infile" "stdin"
+
+# swapon 은 root 전용(TOYFLAG_NEEDROOT)이라 CI 의 ROOT_TESTS 에서 sudo 로 돈다.
+#
+# 1) -a 의 판단 로직: mount namespace 안에서 /etc/fstab (와 /proc/swaps) 위에
+#    테스트 파일을 bind mount 하고, -v 가 찍는 "swapon FILE" 줄로 무엇을 켜려
+#    했는지 본다. 일반 사용자는 user namespace(unshare -r) 안의 가짜 root 로
+#    돌리며, swapon() 자체는 실패한다(EPERM). root 면 mkswap 안 한 빈 파일이라
+#    실패한다(EINVAL). 어느 쪽이든 에러는 stderr 라서 2>/dev/null 로 버린다.
+# 2) 실제로 켜고 끄기: 진짜 root 일 때만. 끄는 건 시스템 swapoff 로.
+[ $(id -u) -eq 0 ] && NS="unshare -m" || NS="unshare -rm"
+can_ns() { echo > ns.x && $NS sh -c 'mount --bind ns.x /etc/fstab'; }
+# fake SWAPS ARGS...: fstab (SWAPS 가 비어 있지 않으면 그 파일도 /proc/swaps
+# 로) 을 끼워 넣고 $C ARGS 실행
+fake() {
+  local sw=$1; shift
+  $NS sh -c 'mount --bind fstab /etc/fstab || exit 1
+    [ -z "$1" ] || mount --bind "$1" /proc/swaps || exit 1
+    shift; exec "$@"' sh "$sw" "$C" "$@"
+}
+
+for i in s1 s2 s3 s4 act 'sp ace'; do : > "$i"; done
+{
+  echo '# comment'
+  echo 'proc /proc proc defaults 0 0'
+  echo "$PWD/s1 none swap sw 0 0"
+  echo "$PWD/s2 none swap noauto 0 0"
+  echo "$PWD/missing none swap nofail 0 0"
+  echo "$PWD/act none swap defaults 0 0"
+  echo "$PWD/s3 none swap pri=5,discard 0 0"
+  echo "$PWD/sp\\040ace none swap sw 0 0"
+  echo "$PWD/s4 none swap pri=x 0 0"
+} > fstab
+# 커널 형식: 파일 이름 뒤는 공백으로 채우고(%-40s, 최소 한 칸), 나머지는 탭
+printf 'Filename\t\t\t\tType\t\tSize\tUsed\tPriority\n%s/act file\t4\t0\t-2\n' \
+  "$PWD" > swaps
+
+# noauto, nofail 인데 없는 파일, 이미 켜진 것(act), 잘못된 pri 는 건너뛴다.
+# fstab 의 \040 은 공백.
+skipnot can_ns
+testing "-a" "fake swaps -av 2>/dev/null | sed \"s@\$PWD@PWD@\"" \
+  "swapon PWD/s1\nswapon PWD/s3\nswapon PWD/sp ace\n" "" ""
+skipnot can_ns
+testing "-a bad pri" "fake swaps -a 2>&1 >/dev/null | grep -c 's4: bad pri'" \
+  "1\n" "" ""
+skipnot can_ns
+testing "-a and FILE" "fake swaps -av s2 2>/dev/null | tail -n 1" \
+  "swapon s2\n" "" ""
+skipnot can_ns
+testing "-a nothing to do" \
+  "echo \"\$PWD/s2 none swap noauto 0 0\" > fstab; fake '' -av; echo \$?" \
+  "0\n" "" ""
+skipnot can_ns
+testing "needs FILE or -a" "fake '' 2>/dev/null; echo \$?" "1\n" "" ""
+
+# 실제 swap 파일 (root 만)
+mkswapfile() {
+  dd if=/dev/zero of="$1" bs=1024 count=1024 2>/dev/null && chmod 600 "$1" &&
+    mkswap "$1" >/dev/null 2>&1
+}
+# prio FILE: /proc/swaps 에 있으면 우선순위, 없으면 아무것도 출력 안 함
+prio() { awk -v f="$PWD/$1" '$1==f{print $5}' /proc/swaps; }
+can_swap() {
+  [ $(id -u) -eq 0 ] && mkswapfile sw && "$C" sw && swapoff sw
+}
+
+skipnot can_swap
+testing "FILE" "\"\$C\" sw && [ -n \"\$(prio sw)\" ] && echo on; swapoff sw" \
+  "on\n" "" ""
+skipnot can_swap
+testing "-p" "\"\$C\" -p 7 sw; prio sw; swapoff sw" "7\n" "" ""
+skipnot can_swap
+testing "already active" \
+  "\"\$C\" sw; \"\$C\" sw 2>/dev/null; echo \$?; swapoff sw" "1\n" "" ""
+skipnot can_swap
+testing "-a pri=" \
+  "echo \"\$PWD/sw none swap pri=3 0 0\" > fstab; fake '' -a; prio sw; swapoff sw" \
+  "3\n" "" ""
+# 이미 켜진 것은 -a 가 건너뛰므로 에러(EBUSY) 없이 끝난다
+skipnot can_swap
+testing "-a skips active" \
+  "echo \"\$PWD/sw none swap sw 0 0\" > fstab; \"\$C\" sw; fake '' -a; echo \$?; swapoff sw" \
+  "0\n" "" ""
+
+rm -f s1 s2 s3 s4 act 'sp ace' fstab swaps sw ns.x
