@@ -1,0 +1,29 @@
+#!/bin/bash
+
+[ -f testing.sh ] && . testing.sh
+
+#testing "name" "command" "result" "infile" "stdin"
+
+# 사용량은 계속 바뀌므로, 바뀌지 않는 total 과 계산 관계만 비교한다.
+# free 는 sysinfo() 를 쓰고, total 은 /proc/meminfo 의 MemTotal / SwapTotal 과 같다.
+MEM=$(awk '/^MemTotal:/{print $2}' /proc/meminfo)
+SWAP=$(awk '/^SwapTotal:/{print $2}' /proc/meminfo)
+
+testcmd "header" "| head -n 1" \
+  "\t\ttotal        used        free      shared     buffers\n" "" ""
+testcmd "row names" "| awk '{print \$1}'" \
+  "total\nMem:\n-/+\nSwap:\n" "" ""
+testcmd "default is bytes" "| awk '/^Mem:/{print \$2}'" "$((MEM*1024))\n" "" ""
+testcmd "-b" "-b | awk '/^Mem:/{print \$2}'" "$((MEM*1024))\n" "" ""
+testcmd "-k" "-k | awk '/^Mem:/{print \$2}'" "$MEM\n" "" ""
+testcmd "-m" "-m | awk '/^Mem:/{print \$2}'" "$((MEM/1024))\n" "" ""
+testcmd "-g" "-g | awk '/^Mem:/{print \$2}'" "$((MEM/1024/1024))\n" "" ""
+testcmd "swap total" "-k | awk '/^Swap:/{print \$2}'" "$SWAP\n" "" ""
+# 한 번 실행 안에서는 같은 sysinfo() 값으로 계산하므로 정확히 맞아야 한다
+testcmd "used + free = total" "-b | awk '/^Mem:/{print \$3+\$4==\$2}'" \
+  "1\n" "" ""
+testcmd "swap used + free = total" "-b | awk '/^Swap:/{print \$3+\$4==\$2}'" \
+  "1\n" "" ""
+testcmd "-h" "-h | awk '/^Mem:/{print \$2}' | grep -cE '^[0-9.]+[KMGTPE]?\$'" \
+  "1\n" "" ""
+testcmd "units conflict" "-k -m 2>/dev/null || echo err" "err\n" "" ""

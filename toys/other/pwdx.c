@@ -20,13 +20,16 @@ void pwdx_main(void)
   char **optargs;
 
   for (optargs = toys.optargs; *optargs; optargs++) {
-    char *path = toybuf;
+    char *path = toybuf, *s;
 
-    sprintf(toybuf, "/proc/%d/cwd", atoi(*optargs));
-    if (!readlink0(path, toybuf, sizeof(toybuf))) {
-      path = strerror(errno);
-      toys.exitval = 1;
+    // The whole argument must be a PID ("1x" isn't PID 1)
+    for (s = *optargs; isdigit(*s); s++);
+    if (*s || s == *optargs || s-*optargs > 10) path = strerror(ESRCH);
+    else {
+      sprintf(toybuf, "/proc/%ld/cwd", atol(*optargs));
+      if (!readlink0(toybuf, toybuf, sizeof(toybuf))) path = strerror(errno);
     }
+    if (path != toybuf) toys.exitval = 1;
 
     xprintf("%s: %s\n", *optargs, path);
   }

@@ -9,7 +9,7 @@ config FREE
   bool "free"
   default y
   help
-    usage: free [-bkmgt]
+    usage: free [-bkmgh]
 
     Display the total, free and used amount of physical memory and swap space.
 
