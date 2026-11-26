@@ -366,6 +366,27 @@ int xrecvwait(int fd, char *buf, int len, union socksaddr *sa, int timeout);
 char *escape_url(char *str, char *and);
 char *unescape_url(char *str, int do_cut);
 
+// proc.c
+
+// One socket from a /proc/net table (see proc_net() and proc_sock())
+struct proc_sock {
+  long long inode;
+  char *name;         // table: tcp tcp6 udp udp6 raw raw6 unix netlink
+  char *path;         // unix: bound path ("@name" if abstract), else NULL
+  int af, protocol;   // AF_INET/INET6/UNIX/NETLINK, netlink protocol
+  unsigned type;      // SOCK_STREAM/DGRAM/RAW (unix: from the table)
+  unsigned state, uid, txq, rxq, lport, rport;  // uid/queues: tcp/udp/raw
+  unsigned laddr[4], raddr[4];  // in network byte order, for inet_ntop()
+  unsigned long refcount, flags;  // unix
+};
+
+long proc_fds(long pid, void (*fn)(int dirfd, char *fd, void *data),
+  void *data);
+int proc_net(char *name, void (*fn)(struct proc_sock *ps, void *data),
+  void *data);
+struct proc_sock *proc_sock(long long inode);
+void proc_sock_free(void);
+
 // password.c
 int get_salt(char *salt, char *algo, int rand);
 int read_password(char *buff, int buflen, char *mesg);
